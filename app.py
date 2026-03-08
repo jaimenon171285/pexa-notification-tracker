@@ -213,10 +213,11 @@ def _build_html_email(message, done_link=""):
     if done_link:
         body_html += f"""<br>
 <hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
-<div style="text-align: center; margin: 20px 0;">
-    <p style="font-size: 16px; font-weight: bold;">✅ MARK THIS TASK AS DONE</p>
+<div style="text-align: center; margin: 20px 0; padding: 16px; background: #f0fff4; border: 2px solid #27ae60; border-radius: 8px;">
+    <p style="font-size: 18px; font-weight: bold; color: #1a7a3a;">✅ PLEASE MARK THIS TASK AS COMPLETE</p>
     <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Click Here When Done</a>
-    <p style="color: #666; font-size: 13px; margin-top: 12px;">Click the button above when you've completed this task.<br>It will automatically update the PEXA Tracker.</p>
+    <p style="color: #333; font-size: 14px; font-weight: bold; margin-top: 14px;">You must click the button above once you have completed this task.</p>
+    <p style="color: #cc0000; font-size: 13px; font-weight: bold; margin-top: 8px;">⚠️ If this task is not marked as complete within 48 hours, a reminder email will be sent automatically.</p>
 </div>
 <hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">"""
 
@@ -410,9 +411,10 @@ def check_overdue_tasks():
 </div>
 
 <hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
-<div style="text-align: center; margin: 20px 0;">
-    <p style="font-size: 16px; font-weight: bold;">✅ If you have completed this task, click below to mark it as done:</p>
-    <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Mark As Done</a>
+<div style="text-align: center; margin: 20px 0; padding: 16px; background: #f0fff4; border: 2px solid #27ae60; border-radius: 8px;">
+    <p style="font-size: 18px; font-weight: bold; color: #1a7a3a;">✅ PLEASE MARK THIS TASK AS COMPLETE</p>
+    <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Click Here To Mark As Done</a>
+    <p style="color: #333; font-size: 14px; font-weight: bold; margin-top: 14px;">You must click the button above once you have completed this task.</p>
 </div>
 <hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
 
