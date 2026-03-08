@@ -1,0 +1,200 @@
+import msal
+import requests
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+
+
+class GraphClient:
+    def __init__(self):
+        self.tenant_id = os.getenv("AZURE_TENANT_ID")
+        self.client_id = os.getenv("AZURE_CLIENT_ID")
+        self.client_secret = os.getenv("AZURE_CLIENT_SECRET")
+        self.mailbox = os.getenv("PEXA_MAILBOX", "rahul@legalworld.com.au")
+        self.folder_name = os.getenv("PEXA_FOLDER_NAME", "PEXA Notifications")
+        self._token = None
+        self._folder_id = None
+
+    def _get_token(self):
+        """Acquire an access token using client credentials flow."""
+        authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+        app = msal.ConfidentialClientApplication(
+            self.client_id,
+            authority=authority,
+            client_credential=self.client_secret,
+        )
+        result = app.acquire_token_for_client(
+            scopes=["https://graph.microsoft.com/.default"]
+        )
+        if "access_token" in result:
+            self._token = result["access_token"]
+            return self._token
+        else:
+            error = result.get("error_description", result.get("error", "Unknown error"))
+            logger.error(f"Failed to acquire token: {error}")
+            raise Exception(f"Failed to acquire Graph API token: {error}")
+
+    def _headers(self):
+        if not self._token:
+            self._get_token()
+        return {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+
+    def _request(self, method, url, **kwargs):
+        """Make an authenticated Graph API request with token refresh on 401."""
+        response = requests.request(method, url, headers=self._headers(), **kwargs)
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.request(method, url, headers=self._headers(), **kwargs)
+        response.raise_for_status()
+        return response.json()
+
+    def _find_folder_id(self):
+        """Find the mail folder ID by name."""
+        if self._folder_id:
+            return self._folder_id
+
+        url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders"
+        data = self._request("GET", url, params={"$top": 100})
+
+        for folder in data.get("value", []):
+            if folder["displayName"].lower() == self.folder_name.lower():
+                self._folder_id = folder["id"]
+                return self._folder_id
+
+        # Check child folders (one level deep)
+        for folder in data.get("value", []):
+            child_url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders/{folder['id']}/childFolders"
+            try:
+                child_data = self._request("GET", child_url, params={"$top": 100})
+                for child in child_data.get("value", []):
+                    if child["displayName"].lower() == self.folder_name.lower():
+                        self._folder_id = child["id"]
+                        return self._folder_id
+            except Exception:
+                continue
+
+        raise Exception(
+            f"Folder '{self.folder_name}' not found in mailbox {self.mailbox}. "
+            f"Available folders: {[f['displayName'] for f in data.get('value', [])]}"
+        )
+
+    def fetch_emails(self, since=None, max_results=50):
+        """
+        Fetch emails from the PEXA notifications folder.
+        Returns a list of email objects with id, subject, body, receivedDateTime, sender.
+        """
+        folder_id = self._find_folder_id()
+        url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders/{folder_id}/messages"
+
+        params = {
+            "$top": max_results,
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,subject,body,bodyPreview,receivedDateTime,from,isRead",
+        }
+
+        if since:
+            params["$filter"] = f"receivedDateTime ge {since}"
+
+        data = self._request("GET", url, params=params)
+        emails = []
+
+        for msg in data.get("value", []):
+            sender_email = ""
+            sender_name = ""
+            if msg.get("from", {}).get("emailAddress"):
+                sender_email = msg["from"]["emailAddress"].get("address", "")
+                sender_name = msg["from"]["emailAddress"].get("name", "")
+
+            body = msg.get("body", {})
+            emails.append({
+                "id": msg["id"],
+                "subject": msg.get("subject", ""),
+                "body_html": body.get("content", "") if body.get("contentType") == "html" else "",
+                "body_text": body.get("content", "") if body.get("contentType") == "text" else "",
+                "body_preview": msg.get("bodyPreview", ""),
+                "received_at": msg.get("receivedDateTime", ""),
+                "sender_email": sender_email,
+                "sender_name": sender_name,
+            })
+
+        # Check for pagination
+        next_link = data.get("@odata.nextLink")
+        while next_link and len(emails) < max_results:
+            data = self._request("GET", next_link)
+            for msg in data.get("value", []):
+                sender_email = ""
+                sender_name = ""
+                if msg.get("from", {}).get("emailAddress"):
+                    sender_email = msg["from"]["emailAddress"].get("address", "")
+                    sender_name = msg["from"]["emailAddress"].get("name", "")
+                body = msg.get("body", {})
+                emails.append({
+                    "id": msg["id"],
+                    "subject": msg.get("subject", ""),
+                    "body_html": body.get("content", "") if body.get("contentType") == "html" else "",
+                    "body_text": body.get("content", "") if body.get("contentType") == "text" else "",
+                    "body_preview": msg.get("bodyPreview", ""),
+                    "received_at": msg.get("receivedDateTime", ""),
+                    "sender_email": sender_email,
+                    "sender_name": sender_name,
+                })
+            next_link = data.get("@odata.nextLink")
+
+        return emails
+
+    def send_email(self, to_email, subject, body_text, from_mailbox=None):
+        """Send an email via Graph API using the specified mailbox."""
+        sender = from_mailbox or self.mailbox
+        url = f"{GRAPH_API_BASE}/users/{sender}/sendMail"
+        payload = {
+            "message": {
+                "subject": subject,
+                "body": {
+                    "contentType": "Text",
+                    "content": body_text,
+                },
+                "toRecipients": [
+                    {
+                        "emailAddress": {
+                            "address": to_email,
+                        }
+                    }
+                ],
+            },
+            "saveToSentItems": True,
+        }
+        response = requests.post(url, headers=self._headers(), json=payload)
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.post(url, headers=self._headers(), json=payload)
+        if response.status_code == 202:
+            return True
+        response.raise_for_status()
+        return True
+
+    def test_connection(self):
+        """Test the Graph API connection and return status info."""
+        try:
+            self._get_token()
+            folder_id = self._find_folder_id()
+            url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders/{folder_id}"
+            data = self._request("GET", url)
+            return {
+                "connected": True,
+                "mailbox": self.mailbox,
+                "folder": data.get("displayName", self.folder_name),
+                "total_items": data.get("totalItemCount", 0),
+                "unread_items": data.get("unreadItemCount", 0),
+            }
+        except Exception as e:
+            return {
+                "connected": False,
+                "error": str(e),
+                "mailbox": self.mailbox,
+            }

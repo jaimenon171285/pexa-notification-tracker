@@ -1,0 +1,604 @@
+// PEXA Notification Tracker - Frontend
+
+const STAFF_LIST = [
+    { name: "Jai", email: "jai@legalworld.com.au" },
+    { name: "Sheriff", email: "sheriff@legalworld.com.au" },
+    { name: "Zane", email: "zane@legalworld.com.au" },
+    { name: "Settlements", email: "settlements@legalworld.com.au" },
+];
+
+const state = {
+    notifications: [],
+    selectedIds: new Set(),
+    expandedId: null,
+    filters: { hide_closed: "true" },
+    currentUser: localStorage.getItem("pexaUser") || "Jai",
+    sortField: "received_at",
+    sortDir: "desc",
+    autoRefreshInterval: null,
+    emailModalNotification: null,
+};
+
+// --- API Calls ---
+
+async function fetchNotifications() {
+    const params = new URLSearchParams();
+    for (const [key, val] of Object.entries(state.filters)) {
+        if (val) params.set(key, val);
+    }
+    const resp = await fetch(`/api/notifications?${params}`);
+    state.notifications = await resp.json();
+    renderTable();
+}
+
+async function fetchStats() {
+    const resp = await fetch("/api/stats");
+    const stats = await resp.json();
+    renderStats(stats);
+}
+
+async function syncNow() {
+    const btn = document.getElementById("btn-sync");
+    btn.disabled = true;
+    btn.classList.add("syncing");
+    btn.textContent = "Syncing...";
+    try {
+        const resp = await fetch("/api/sync", { method: "POST" });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(`Sync complete: ${data.new_count} new notifications`, "success");
+        } else {
+            showToast(`Sync failed: ${data.status}`, "error");
+        }
+        await refreshAll();
+    } catch (e) {
+        showToast(`Sync error: ${e.message}`, "error");
+    } finally {
+        btn.disabled = false;
+        btn.classList.remove("syncing");
+        btn.textContent = "Sync Now";
+    }
+}
+
+async function updateStatus(id, status) {
+    await fetch(`/api/notifications/${id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, user: state.currentUser }),
+    });
+    showToast(`Marked as ${status}`, "success");
+    await refreshAll();
+}
+
+async function addNote(id) {
+    const input = document.getElementById(`note-input-${id}`);
+    const text = input.value.trim();
+    if (!text) return;
+    await fetch(`/api/notifications/${id}/note`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: text, user: state.currentUser }),
+    });
+    input.value = "";
+    showToast("Note added", "success");
+    await refreshAll();
+}
+
+// --- Email Task ---
+
+function openEmailModal(id) {
+    const n = state.notifications.find(x => x.id === id);
+    if (!n) return;
+    state.emailModalNotification = n;
+
+    const recipientOptions = STAFF_LIST.map(s =>
+        `<option value="${s.email}">${s.name} (${s.email})</option>`
+    ).join("");
+
+    const defaultMessage = `Hi,\n\nPlease action the following PEXA notification:\n\n` +
+        `Matter #: ${n.matter_number}\n` +
+        `Type: ${n.notification_type}\n` +
+        `Settlement: ${n.settlement_date || "N/A"}\n` +
+        `Summary: ${n.summary}\n\n` +
+        `--- Full PEXA Message ---\n\n` +
+        `${n.full_body || "No content available"}\n\n` +
+        `--- End of Message ---\n\n` +
+        `Please complete and update the tracker when done.\n\nThanks,\n${state.currentUser}`;
+
+    document.getElementById("email-modal").innerHTML = `
+        <div class="modal-backdrop" onclick="closeEmailModal()"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Send Task Email</h3>
+                <button class="modal-close" onclick="closeEmailModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>To</label>
+                    <select id="email-to" class="form-control">
+                        <option value="">Select recipient...</option>
+                        ${recipientOptions}
+                    </select>
+                    <input type="email" id="email-to-custom" class="form-control" placeholder="Or type email address..." style="margin-top:6px">
+                </div>
+                <div class="form-group">
+                    <label>Subject</label>
+                    <input type="text" id="email-subject" class="form-control"
+                        value="PEXA Action Required - Matter ${n.matter_number} - ${n.notification_type}">
+                </div>
+                <div class="form-group">
+                    <label>Message</label>
+                    <textarea id="email-message" class="form-control" rows="16">${defaultMessage}</textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-dismiss" onclick="closeEmailModal()">Cancel</button>
+                <button class="btn btn-send" onclick="sendTaskEmail(${n.id})">Send Email</button>
+            </div>
+        </div>`;
+    document.getElementById("email-modal").classList.add("open");
+}
+
+function closeEmailModal() {
+    document.getElementById("email-modal").classList.remove("open");
+    document.getElementById("email-modal").innerHTML = "";
+    state.emailModalNotification = null;
+}
+
+async function sendTaskEmail(notificationId) {
+    const toSelect = document.getElementById("email-to").value;
+    const toCustom = document.getElementById("email-to-custom").value.trim();
+    const to = toCustom || toSelect;
+
+    if (!to) {
+        showToast("Please select or enter a recipient", "error");
+        return;
+    }
+
+    const subject = document.getElementById("email-subject").value;
+    const message = document.getElementById("email-message").value;
+
+    const sendBtn = document.querySelector(".btn-send");
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending...";
+
+    try {
+        const resp = await fetch("/api/send-task", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                notification_id: notificationId,
+                to_email: to,
+                subject: subject,
+                message: message,
+                from_user: state.currentUser,
+            }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(`Task emailed to ${to}`, "success");
+            closeEmailModal();
+            await refreshAll();
+        } else {
+            showToast(`Failed to send: ${data.error}`, "error");
+        }
+    } catch (e) {
+        showToast(`Send error: ${e.message}`, "error");
+    } finally {
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send Email";
+    }
+}
+
+async function bulkAction(action) {
+    if (state.selectedIds.size === 0) return;
+    await fetch("/api/bulk-action", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            ids: Array.from(state.selectedIds),
+            action,
+            user: state.currentUser,
+        }),
+    });
+    state.selectedIds.clear();
+    showToast(`${action} applied to selected items`, "success");
+    await refreshAll();
+}
+
+async function checkConnection() {
+    try {
+        const resp = await fetch("/api/connection");
+        const data = await resp.json();
+        const banner = document.getElementById("connection-banner");
+        if (data.connected) {
+            banner.className = "connection-banner connected";
+            banner.innerHTML = `Connected to <strong>${data.mailbox}</strong> - Folder: "${data.folder}" (${data.total_items} emails, ${data.unread_items} unread)`;
+        } else {
+            banner.className = "connection-banner error";
+            banner.innerHTML = `Not connected: ${data.error}. Check your .env configuration.`;
+        }
+    } catch (e) {
+        const banner = document.getElementById("connection-banner");
+        banner.className = "connection-banner error";
+        banner.innerHTML = `Cannot reach server: ${e.message}`;
+    }
+}
+
+// --- Rendering ---
+
+function renderStats(stats) {
+    document.getElementById("stat-action").textContent = stats.action_required || 0;
+    document.getElementById("stat-review").textContent = stats.review || 0;
+    document.getElementById("stat-info").textContent = stats.info || 0;
+    document.getElementById("stat-done").textContent = stats.completed || 0;
+    document.getElementById("stat-new").textContent = stats.new || 0;
+
+    const syncEl = document.getElementById("sync-info");
+    if (stats.last_sync_time) {
+        const syncTime = new Date(stats.last_sync_time);
+        syncEl.textContent = `Last sync: ${syncTime.toLocaleTimeString()} - ${stats.last_sync}`;
+    } else {
+        syncEl.textContent = stats.last_sync || "Never synced";
+    }
+}
+
+function renderTable() {
+    const tbody = document.getElementById("notifications-body");
+    const notifications = sortNotifications(state.notifications);
+
+    if (notifications.length === 0) {
+        tbody.innerHTML = `
+            <tr><td colspan="8" class="empty-state">
+                <div class="empty-icon">📭</div>
+                <h3>No notifications found</h3>
+                <p>Try adjusting your filters or sync to check for new emails</p>
+            </td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = notifications.map(n => {
+        const isExpanded = state.expandedId === n.id;
+        const isSelected = state.selectedIds.has(n.id);
+
+        return `
+            <tr class="${isSelected ? "selected" : ""} ${isExpanded ? "expanded" : ""}"
+                onclick="toggleExpand(${n.id}, event)">
+                <td class="checkbox-cell" onclick="event.stopPropagation()">
+                    <input type="checkbox" ${isSelected ? "checked" : ""}
+                        onchange="toggleSelect(${n.id}, this.checked)">
+                </td>
+                <td><span class="matter-num">${escapeHtml(n.matter_number)}</span></td>
+                <td>${renderPriority(n.category)}</td>
+                <td>${escapeHtml(n.notification_type)}</td>
+                <td title="${escapeHtml(n.summary)}">${truncate(n.summary, 60)}</td>
+                <td>${formatDate(n.settlement_date)}</td>
+                <td>${formatDateTime(n.received_at)}</td>
+                <td>${renderStatus(n.status)}</td>
+            </tr>
+            <tr class="detail-panel ${isExpanded ? "open" : ""}" id="detail-${n.id}">
+                <td colspan="8">
+                    ${isExpanded ? renderDetail(n) : ""}
+                </td>
+            </tr>`;
+    }).join("");
+
+    updateBulkActions();
+}
+
+function renderPriority(category) {
+    const labels = {
+        action_required: "Action",
+        review: "Review",
+        info: "Info",
+    };
+    return `<span class="priority-badge priority-${category === 'action_required' ? 'action' : category}">
+        <span class="priority-dot"></span>
+        ${labels[category] || category}
+    </span>`;
+}
+
+function renderStatus(status) {
+    const labels = {
+        new: "New",
+        reviewed: "Reviewed",
+        actioned: "Actioned",
+        dismissed: "Dismissed",
+    };
+    return `<span class="status-badge status-${status}">${labels[status] || status}</span>`;
+}
+
+function renderDetail(n) {
+    return `
+        <div class="detail-content">
+            <div class="detail-section">
+                <h4>Notification Details</h4>
+                <div class="detail-field">
+                    <div class="field-label">Matter Number</div>
+                    <div class="field-value">${escapeHtml(n.matter_number)}</div>
+                </div>
+                <div class="detail-field">
+                    <div class="field-label">Settlement Date</div>
+                    <div class="field-value ${isSettlementSoon(n.settlement_date) ? 'settlement-soon' : ''}">${escapeHtml(n.settlement_date || "N/A")}</div>
+                </div>
+                <div class="detail-field">
+                    <div class="field-label">Workspace</div>
+                    <div class="field-value">${escapeHtml(n.workspace_number || "N/A")} (${escapeHtml(n.workspace_status || "N/A")})</div>
+                </div>
+                <div class="detail-field">
+                    <div class="field-label">Subject</div>
+                    <div class="field-value">${escapeHtml(n.subject)}</div>
+                </div>
+                <div class="detail-field">
+                    <div class="field-label">Received</div>
+                    <div class="field-value">${formatDateTime(n.received_at)}</div>
+                </div>
+                ${n.actioned_by ? `
+                <div class="detail-field">
+                    <div class="field-label">Actioned By</div>
+                    <div class="field-value">${escapeHtml(n.actioned_by)} at ${formatDateTime(n.actioned_at)}</div>
+                </div>` : ""}
+
+                <div class="detail-actions">
+                    <button class="btn btn-email" onclick="event.stopPropagation(); openEmailModal(${n.id})">Email Task</button>
+                    ${n.status !== "actioned" ? `<button class="btn btn-action" onclick="event.stopPropagation(); updateStatus(${n.id}, 'actioned')">Mark Actioned</button>` : ""}
+                    ${n.status !== "reviewed" ? `<button class="btn btn-review" onclick="event.stopPropagation(); updateStatus(${n.id}, 'reviewed')">Mark Reviewed</button>` : ""}
+                    ${n.status !== "dismissed" ? `<button class="btn btn-dismiss" onclick="event.stopPropagation(); updateStatus(${n.id}, 'dismissed')">Dismiss</button>` : ""}
+                    ${n.status !== "new" ? `<button class="btn btn-reopen" onclick="event.stopPropagation(); updateStatus(${n.id}, 'new')">Reopen</button>` : ""}
+                </div>
+            </div>
+            <div class="detail-section">
+                <h4>Notes</h4>
+                <div class="note-input-area" onclick="event.stopPropagation()">
+                    <input type="text" id="note-input-${n.id}" placeholder="Add a note..."
+                        onkeydown="if(event.key==='Enter'){addNote(${n.id})}">
+                    <button onclick="addNote(${n.id})">Add</button>
+                </div>
+                ${n.notes ? `<div class="existing-notes">${escapeHtml(n.notes)}</div>` : ""}
+
+                <h4 style="margin-top:16px">Full Email Content</h4>
+                <div class="full-body-text">${escapeHtml(n.full_body || "No content available")}</div>
+            </div>
+        </div>`;
+}
+
+// --- Interactions ---
+
+function toggleExpand(id, event) {
+    if (event.target.type === "checkbox") return;
+    state.expandedId = state.expandedId === id ? null : id;
+    renderTable();
+}
+
+function toggleSelect(id, checked) {
+    if (checked) {
+        state.selectedIds.add(id);
+    } else {
+        state.selectedIds.delete(id);
+    }
+    renderTable();
+}
+
+function toggleSelectAll(checked) {
+    if (checked) {
+        state.notifications.forEach(n => state.selectedIds.add(n.id));
+    } else {
+        state.selectedIds.clear();
+    }
+    renderTable();
+}
+
+function updateBulkActions() {
+    const bar = document.getElementById("bulk-actions");
+    const count = state.selectedIds.size;
+    if (count > 0) {
+        bar.classList.add("visible");
+        document.getElementById("selected-count").textContent = `${count} selected`;
+    } else {
+        bar.classList.remove("visible");
+    }
+}
+
+function filterByCategory(category) {
+    // Toggle filter
+    if (state.filters.category === category) {
+        delete state.filters.category;
+    } else {
+        state.filters.category = category;
+    }
+    // Update active state on cards
+    document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
+    if (state.filters.category) {
+        const cardMap = {
+            action_required: "card-action",
+            review: "card-review",
+            info: "card-info",
+        };
+        const card = document.getElementById(cardMap[category]);
+        if (card) card.classList.add("active");
+    }
+    fetchNotifications();
+}
+
+function filterByStatus(status) {
+    if (state.filters.status === status) {
+        delete state.filters.status;
+        state.filters.hide_closed = "true";
+    } else {
+        state.filters.status = status;
+        // When explicitly viewing a status, don't hide anything
+        delete state.filters.hide_closed;
+    }
+    document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
+    if (state.filters.status === "new") {
+        document.getElementById("card-new").classList.add("active");
+    } else if (state.filters.status === "actioned") {
+        document.getElementById("card-done").classList.add("active");
+    }
+    document.getElementById("filter-status").value = state.filters.status || "";
+    fetchNotifications();
+}
+
+function applyFilters() {
+    state.filters.matter = document.getElementById("filter-matter").value || undefined;
+    state.filters.search = document.getElementById("filter-search").value || undefined;
+    const statusVal = document.getElementById("filter-status").value;
+    if (statusVal) {
+        state.filters.status = statusVal;
+        delete state.filters.hide_closed;
+    } else {
+        delete state.filters.status;
+        state.filters.hide_closed = "true";
+    }
+    // Clean undefined values
+    state.filters = Object.fromEntries(
+        Object.entries(state.filters).filter(([_, v]) => v !== undefined && v !== "")
+    );
+    fetchNotifications();
+}
+
+function clearFilters() {
+    state.filters = { hide_closed: "true" };
+    document.getElementById("filter-matter").value = "";
+    document.getElementById("filter-search").value = "";
+    document.getElementById("filter-status").value = "";
+    document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
+    fetchNotifications();
+}
+
+function setUser() {
+    const select = document.getElementById("user-select");
+    state.currentUser = select.value;
+    localStorage.setItem("pexaUser", state.currentUser);
+}
+
+// --- Sorting ---
+
+function sortBy(field) {
+    if (state.sortField === field) {
+        state.sortDir = state.sortDir === "asc" ? "desc" : "asc";
+    } else {
+        state.sortField = field;
+        state.sortDir = "desc";
+    }
+    renderTable();
+    updateSortIndicators();
+}
+
+function sortNotifications(notifications) {
+    return [...notifications].sort((a, b) => {
+        let aVal = a[state.sortField] || "";
+        let bVal = b[state.sortField] || "";
+
+        // Category priority sorting
+        if (state.sortField === "category") {
+            const order = { action_required: 0, review: 1, info: 2 };
+            aVal = order[aVal] ?? 3;
+            bVal = order[bVal] ?? 3;
+        }
+
+        if (aVal < bVal) return state.sortDir === "asc" ? -1 : 1;
+        if (aVal > bVal) return state.sortDir === "asc" ? 1 : -1;
+        return 0;
+    });
+}
+
+function updateSortIndicators() {
+    document.querySelectorAll("thead th[data-sort]").forEach(th => {
+        const icon = th.querySelector(".sort-icon");
+        if (th.dataset.sort === state.sortField) {
+            th.classList.add("sorted");
+            icon.textContent = state.sortDir === "asc" ? " ▲" : " ▼";
+        } else {
+            th.classList.remove("sorted");
+            icon.textContent = " ⇅";
+        }
+    });
+}
+
+// --- Helpers ---
+
+function escapeHtml(str) {
+    if (!str) return "";
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+function truncate(str, len) {
+    if (!str) return "";
+    return str.length > len ? escapeHtml(str.slice(0, len)) + "..." : escapeHtml(str);
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) return "N/A";
+    return escapeHtml(dateStr);
+}
+
+function formatDateTime(isoStr) {
+    if (!isoStr) return "N/A";
+    try {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return escapeHtml(isoStr);
+        return d.toLocaleDateString("en-AU", {
+            day: "2-digit", month: "2-digit", year: "numeric",
+            hour: "2-digit", minute: "2-digit",
+        });
+    } catch {
+        return escapeHtml(isoStr);
+    }
+}
+
+function isSettlementSoon(dateStr) {
+    if (!dateStr) return false;
+    // Try to parse Australian date format dd/mm/yyyy
+    const match = dateStr.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if (!match) return false;
+    const d = new Date(match[3], match[2] - 1, match[1]);
+    const now = new Date();
+    const diffDays = (d - now) / (1000 * 60 * 60 * 24);
+    return diffDays >= 0 && diffDays <= 3;
+}
+
+function showToast(message, type = "success") {
+    const container = document.getElementById("toast-container");
+    const toast = document.createElement("div");
+    toast.className = `toast ${type}`;
+    toast.textContent = message;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), 4000);
+}
+
+// --- Initialization ---
+
+async function refreshAll() {
+    await Promise.all([fetchNotifications(), fetchStats()]);
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    // Set saved user
+    const userSelect = document.getElementById("user-select");
+    userSelect.value = state.currentUser;
+
+    // Check connection
+    await checkConnection();
+
+    // Load data
+    await refreshAll();
+
+    // Auto-refresh every 60 seconds
+    state.autoRefreshInterval = setInterval(refreshAll, 60000);
+
+    // Filter input listeners
+    document.getElementById("filter-matter").addEventListener("input", debounce(applyFilters, 500));
+    document.getElementById("filter-search").addEventListener("input", debounce(applyFilters, 500));
+    document.getElementById("filter-status").addEventListener("change", applyFilters);
+});
+
+function debounce(fn, ms) {
+    let timer;
+    return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), ms);
+    };
+}

@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PEXA Notification Tracker</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1><span>PEXA</span> Notification Tracker</h1>
+        <div class="header-right">
+            <span id="sync-info" class="sync-info">Loading...</span>
+            <select id="user-select" class="user-select" onchange="setUser()">
+                <option value="Jai">Jai</option>
+                <option value="Sheriff">Sheriff</option>
+            </select>
+            <button id="btn-sync" class="btn-sync" onclick="syncNow()">Sync Now</button>
+        </div>
+    </div>
+
+    <!-- Connection Banner -->
+    <div id="connection-banner" class="connection-banner" style="margin-top:12px">
+        Checking connection...
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-bar">
+        <div class="stat-card stat-new" id="card-new" onclick="filterByStatus('new')">
+            <div id="stat-new" class="stat-number">-</div>
+            <div class="stat-label">New</div>
+        </div>
+        <div class="stat-card stat-action" id="card-action" onclick="filterByCategory('action_required')">
+            <div id="stat-action" class="stat-number">-</div>
+            <div class="stat-label">Action Required</div>
+        </div>
+        <div class="stat-card stat-review" id="card-review" onclick="filterByCategory('review')">
+            <div id="stat-review" class="stat-number">-</div>
+            <div class="stat-label">To Review</div>
+        </div>
+        <div class="stat-card stat-info" id="card-info" onclick="filterByCategory('info')">
+            <div id="stat-info" class="stat-number">-</div>
+            <div class="stat-label">Info Only</div>
+        </div>
+        <div class="stat-card stat-done" id="card-done" onclick="filterByStatus('actioned')">
+            <div id="stat-done" class="stat-number">-</div>
+            <div class="stat-label">Completed</div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="filters-bar">
+        <div class="filter-group">
+            <label>Matter #</label>
+            <input type="text" id="filter-matter" class="filter-input" placeholder="e.g. 71571" style="width:120px">
+        </div>
+        <div class="filter-group">
+            <label>Search</label>
+            <input type="text" id="filter-search" class="filter-input" placeholder="Search notifications..." style="width:220px">
+        </div>
+        <div class="filter-group">
+            <label>Status</label>
+            <select id="filter-status" class="filter-select">
+                <option value="">All</option>
+                <option value="new">New</option>
+                <option value="reviewed">Reviewed</option>
+                <option value="actioned">Actioned</option>
+                <option value="dismissed">Dismissed</option>
+            </select>
+        </div>
+        <button class="btn-clear-filters" onclick="clearFilters()">Clear Filters</button>
+    </div>
+
+    <!-- Bulk Actions -->
+    <div id="bulk-actions" class="bulk-actions">
+        <span id="selected-count" class="selected-count">0 selected</span>
+        <button class="btn-bulk" onclick="bulkAction('reviewed')">Mark Reviewed</button>
+        <button class="btn-bulk" onclick="bulkAction('actioned')">Mark Actioned</button>
+        <button class="btn-bulk" onclick="bulkAction('dismissed')">Dismiss All</button>
+    </div>
+
+    <!-- Notifications Table -->
+    <div class="table-container">
+        <table>
+            <thead>
+                <tr>
+                    <th class="checkbox-cell">
+                        <input type="checkbox" onchange="toggleSelectAll(this.checked)">
+                    </th>
+                    <th data-sort="matter_number" onclick="sortBy('matter_number')">
+                        Matter # <span class="sort-icon">&#8693;</span>
+                    </th>
+                    <th data-sort="category" onclick="sortBy('category')">
+                        Priority <span class="sort-icon">&#8693;</span>
+                    </th>
+                    <th data-sort="notification_type" onclick="sortBy('notification_type')">
+                        Type <span class="sort-icon">&#8693;</span>
+                    </th>
+                    <th>Summary</th>
+                    <th data-sort="settlement_date" onclick="sortBy('settlement_date')">
+                        Settlement <span class="sort-icon">&#8693;</span>
+                    </th>
+                    <th data-sort="received_at" onclick="sortBy('received_at')">
+                        Received <span class="sort-icon">&#8693;</span>
+                    </th>
+                    <th data-sort="status" onclick="sortBy('status')">
+                        Status <span class="sort-icon">&#8693;</span>
+                    </th>
+                </tr>
+            </thead>
+            <tbody id="notifications-body">
+                <tr><td colspan="8" class="loading">
+                    <div class="spinner"></div>
+                    <p style="margin-top:12px">Loading notifications...</p>
+                </td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Email Modal -->
+    <div id="email-modal" class="email-modal"></div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
