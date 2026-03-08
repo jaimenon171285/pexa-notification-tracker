@@ -9,7 +9,8 @@ from flask import Flask, render_template, jsonify, request, make_response
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import init_db, get_notifications, get_notification, update_notification_status, \
-    update_notification_assignment, add_note, get_stats, insert_notification
+    update_notification_assignment, add_note, get_stats, insert_notification, \
+    update_emailed_info, get_overdue_emailed_tasks, mark_reminder_sent
 from email_parser import parse_pexa_email
 from graph_client import GraphClient
 
@@ -207,11 +208,13 @@ def api_send_task():
         cc_address = os.getenv("CC_MAILBOX", "teams@legalworld.com.au")
         graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox, cc_emails=cc_address)
 
-        # Add a note to the notification recording the email
+        # Add a note and auto-set status to "reviewed" (To Review)
         if notification_id:
             add_note(notification_id, f"Task emailed to {to_email} by {from_user} (with Mark as Done link)", from_user)
+            update_notification_status(notification_id, "reviewed", from_user)
+            update_emailed_info(notification_id, to_email, datetime.utcnow().isoformat())
 
-        logger.info(f"Task email sent to {to_email} for notification {notification_id} by {from_user}")
+        logger.info(f"Task email sent to {to_email} for notification {notification_id} by {from_user} - status set to reviewed")
         return jsonify({"success": True})
     except Exception as e:
         logger.error(f"Failed to send task email: {e}")
@@ -311,6 +314,72 @@ def mark_done_from_email(notification_id):
     """, 200)
 
 
+# --- 48-Hour Reminder Check ---
+
+def check_overdue_tasks():
+    """Check for tasks emailed more than 48 hours ago that haven't been actioned.
+    Sends a reminder email to the original recipient with the Mark as Done link
+    and asks them to contact Sheriff/Jai if they need help."""
+    try:
+        overdue = get_overdue_emailed_tasks(hours=48)
+        if not overdue:
+            logger.info("Overdue check: no overdue tasks found")
+            return
+
+        # Base URL for Mark as Done links (no request context in scheduled jobs)
+        base_url = os.getenv("APP_URL", "https://pexa-notification-tracker.onrender.com")
+        send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
+
+        reminder_count = 0
+        for task in overdue:
+            try:
+                nid = task["id"]
+                to_email = task["emailed_to"]
+                matter = task.get("matter_number", "Unknown")
+                ntype = task.get("notification_type", "PEXA Notification")
+                summary = task.get("summary", "")[:200]
+
+                # Generate Mark as Done link
+                token = generate_action_token(nid)
+                done_link = f"{base_url}/done/{nid}?token={token}"
+
+                # Build reminder email
+                subject = f"REMINDER: Outstanding PEXA Task - Matter #{matter}"
+                body = f"Hi,\n\n"
+                body += f"This is a reminder that the following PEXA task was sent to you over 48 hours ago and has not yet been marked as complete:\n\n"
+                body += f"Matter #: {matter}\n"
+                body += f"Type: {ntype}\n"
+                body += f"Summary: {summary}\n\n"
+                body += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                body += f"If you have completed this task, please click the link below to mark it as done:\n\n"
+                body += f"✅ MARK AS DONE: {done_link}\n\n"
+                body += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                body += f"If this task has NOT been completed, or if you need help, please email:\n"
+                body += f"  • sheriff@legalworld.com.au\n"
+                body += f"  • jai@legalworld.com.au\n\n"
+                body += f"Please let them know what is happening with this task and if you require any assistance.\n\n"
+                body += f"Thank you,\nPEXA Notification Tracker\n"
+
+                # Send reminder - CC Sheriff and Jai so they're aware
+                cc_emails = "sheriff@legalworld.com.au,jai@legalworld.com.au"
+                graph_client.send_email(to_email, subject, body, from_mailbox=send_mailbox, cc_emails=cc_emails)
+
+                # Mark reminder as sent so we don't send again
+                mark_reminder_sent(nid)
+                add_note(nid, f"48-hour reminder sent to {to_email}", "System")
+
+                reminder_count += 1
+                logger.info(f"Reminder sent to {to_email} for notification {nid} (Matter #{matter})")
+
+            except Exception as e:
+                logger.error(f"Failed to send reminder for notification {task['id']}: {e}")
+
+        logger.info(f"Overdue check complete: {reminder_count} reminders sent out of {len(overdue)} overdue tasks")
+
+    except Exception as e:
+        logger.error(f"Overdue task check failed: {e}")
+
+
 # --- Startup ---
 
 # Always init the database and scheduler (works for both gunicorn and flask dev)
@@ -319,6 +388,7 @@ init_db()
 sync_interval = int(os.getenv("SYNC_INTERVAL_MINUTES", "5"))
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
+scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
 scheduler.start()
 
 # Initial sync

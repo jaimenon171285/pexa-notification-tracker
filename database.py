@@ -1,7 +1,7 @@
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # --- SQLite database path ---
 # Use DB_PATH env var if set (for Render persistent disk), otherwise store next to app
@@ -70,14 +70,17 @@ def init_db():
         cur.execute(idx_sql)
 
     # Migrations: add columns if they don't exist
-    try:
-        cur.execute("ALTER TABLE notifications ADD COLUMN message_from TEXT DEFAULT ''")
-    except Exception:
-        pass
-    try:
-        cur.execute("ALTER TABLE notifications ADD COLUMN action_token TEXT DEFAULT ''")
-    except Exception:
-        pass
+    for col_sql in [
+        "ALTER TABLE notifications ADD COLUMN message_from TEXT DEFAULT ''",
+        "ALTER TABLE notifications ADD COLUMN action_token TEXT DEFAULT ''",
+        "ALTER TABLE notifications ADD COLUMN emailed_to TEXT DEFAULT ''",
+        "ALTER TABLE notifications ADD COLUMN emailed_at TEXT DEFAULT ''",
+        "ALTER TABLE notifications ADD COLUMN reminder_sent INTEGER DEFAULT 0",
+    ]:
+        try:
+            cur.execute(col_sql)
+        except Exception:
+            pass
 
     conn.commit()
 
@@ -275,6 +278,52 @@ def get_notification_count():
     cur.close()
     conn.close()
     return row["count"]
+
+
+def update_emailed_info(notification_id, emailed_to, emailed_at):
+    """Record that a task email was sent for this notification."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE notifications SET emailed_to = ?, emailed_at = ?, reminder_sent = 0, updated_at = ? WHERE id = ?",
+        (emailed_to, emailed_at, datetime.utcnow().isoformat(), notification_id)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
+def get_overdue_emailed_tasks(hours=48):
+    """Get notifications that were emailed but not actioned within the given hours.
+    Only returns tasks where reminder_sent = 0 (haven't been reminded yet)."""
+    conn = get_db()
+    cur = conn.cursor()
+    cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+    cur.execute("""
+        SELECT * FROM notifications
+        WHERE emailed_to != '' AND emailed_to IS NOT NULL
+          AND emailed_at != '' AND emailed_at IS NOT NULL
+          AND emailed_at < ?
+          AND status NOT IN ('actioned', 'dismissed')
+          AND reminder_sent = 0
+    """, (cutoff,))
+    rows = _fetchall(cur)
+    cur.close()
+    conn.close()
+    return rows
+
+
+def mark_reminder_sent(notification_id):
+    """Mark that a reminder has been sent for this notification."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE notifications SET reminder_sent = 1, updated_at = ? WHERE id = ?",
+        (datetime.utcnow().isoformat(), notification_id)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
 
 
 def get_stats():
