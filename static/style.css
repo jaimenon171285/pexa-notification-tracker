@@ -562,17 +562,327 @@ tbody td {
     border-radius: 4px;
 }
 
-/* Responsive */
+/* Filter Toggle Button (hidden on desktop) */
+.filter-toggle {
+    display: none;
+}
+
+/* Responsive - Tablet */
 @media (max-width: 1024px) {
     .stats-bar { flex-wrap: wrap; }
     .stat-card { min-width: 140px; }
     .detail-content { grid-template-columns: 1fr; }
 }
 
+/* ============================================
+   MOBILE STYLES (< 768px)
+   ============================================ */
 @media (max-width: 768px) {
-    .header { flex-direction: column; gap: 12px; }
-    .filters-bar { flex-direction: column; }
-    .table-container { overflow-x: auto; }
+
+    /* --- Header --- */
+    .header {
+        flex-direction: column;
+        gap: 10px;
+        padding: 12px 16px;
+    }
+
+    .header h1 { font-size: 17px; }
+
+    .header-right {
+        width: 100%;
+        justify-content: space-between;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    .sync-info {
+        width: 100%;
+        text-align: center;
+        font-size: 11px;
+        order: 3;
+    }
+
+    .user-select { font-size: 12px; padding: 5px 8px; }
+    .btn-sync { font-size: 12px; padding: 6px 12px; }
+
+    /* --- Connection Banner --- */
+    .connection-banner {
+        margin: 0 12px;
+        padding: 8px 12px;
+        font-size: 11px;
+    }
+
+    /* --- Stats Bar --- */
+    .stats-bar {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        padding: 12px;
+        overflow-x: visible;
+    }
+
+    .stat-card {
+        min-width: 0;
+        padding: 12px 14px;
+        border-radius: 8px;
+    }
+
+    .stat-card .stat-number { font-size: 22px; }
+    .stat-card .stat-label { font-size: 10px; margin-top: 4px; }
+
+    /* Last stat card spans full width */
+    .stat-card:last-child {
+        grid-column: 1 / -1;
+    }
+
+    /* --- Filter Toggle --- */
+    .filter-toggle {
+        display: block;
+        width: calc(100% - 24px);
+        margin: 0 12px 8px;
+        padding: 10px 16px;
+        background: white;
+        border: 1px solid #d1d5db;
+        border-radius: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #6b7280;
+        cursor: pointer;
+        text-align: left;
+    }
+
+    .filter-toggle span { float: right; }
+
+    /* --- Filters (hidden by default on mobile) --- */
+    .filters-bar {
+        display: none;
+        flex-direction: column;
+        padding: 0 12px 12px;
+        gap: 8px;
+    }
+
+    .filters-bar.mobile-open { display: flex; }
+
+    .filter-group {
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .filter-group label { margin-bottom: 2px; }
+
+    .filter-input,
+    .filter-select {
+        width: 100% !important;
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+
+    .btn-clear-filters {
+        width: 100%;
+        padding: 10px;
+        font-size: 14px;
+    }
+
+    /* --- Bulk Actions --- */
+    .bulk-actions {
+        padding: 8px 12px;
+        gap: 8px;
+        flex-wrap: wrap;
+    }
+
+    /* --- TABLE → CARD LAYOUT --- */
+    .table-container { padding: 0 12px 12px; }
+
+    table {
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+    }
+
+    /* Hide table header on mobile */
+    thead { display: none; }
+
+    /* Each row becomes a card */
+    tbody tr:not(.detail-panel) {
+        display: block;
+        background: white;
+        border-radius: 10px;
+        margin-bottom: 8px;
+        padding: 14px 16px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        border-bottom: none;
+        position: relative;
+    }
+
+    tbody tr:not(.detail-panel):hover {
+        background: white;
+    }
+
+    tbody tr.expanded:not(.detail-panel) {
+        background: #f0fdf4;
+        border-radius: 10px 10px 0 0;
+        margin-bottom: 0;
+    }
+
+    /* Each cell becomes a block with label */
+    tbody td {
+        display: block;
+        padding: 3px 0;
+        font-size: 13px;
+        text-align: left;
+    }
+
+    tbody td::before {
+        content: attr(data-label);
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 600;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.3px;
+        min-width: 70px;
+        margin-right: 8px;
+    }
+
+    /* Hide checkbox & From columns on mobile cards */
+    tbody td.checkbox-cell { display: none; }
+    tbody td[data-label="From"] { display: none; }
+    tbody td[data-label="Received"] { display: none; }
+
+    /* Style the matter number prominently */
+    tbody td[data-label="Matter #"] {
+        padding-bottom: 6px;
+        border-bottom: 1px solid #f3f4f6;
+        margin-bottom: 4px;
+    }
+
+    tbody td[data-label="Matter #"] .matter-num {
+        font-size: 16px;
+    }
+
+    /* Status badge floats to top-right of card */
+    tbody td[data-label="Status"] {
+        position: absolute;
+        top: 14px;
+        right: 16px;
+        padding: 0;
+    }
+
+    tbody td[data-label="Status"]::before { display: none; }
+
+    /* Summary takes full width, no label prefix */
+    tbody td[data-label="Summary"] {
+        padding-top: 6px;
+    }
+
+    tbody td[data-label="Summary"]::before { display: none; }
+
+    /* From cell - reset max-width on mobile */
+    .from-cell {
+        max-width: none;
+        white-space: normal;
+    }
+
+    /* --- Detail Panel (full-screen on mobile) --- */
+    .detail-panel {
+        display: none;
+        background: white;
+        border-bottom: none;
+    }
+
+    .detail-panel.open {
+        display: block;
+        border-radius: 0 0 10px 10px;
+        margin-bottom: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+
+    .detail-panel td {
+        display: block;
+        padding: 0;
+    }
+
+    .detail-panel td::before { display: none; }
+
+    .detail-content {
+        grid-template-columns: 1fr;
+        padding: 16px;
+        gap: 16px;
+    }
+
+    /* Stack action buttons vertically */
+    .detail-actions {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .detail-actions .btn {
+        width: 100%;
+        padding: 12px 16px;
+        font-size: 14px;
+        text-align: center;
+    }
+
+    /* Note input */
+    .note-input-area {
+        flex-direction: column;
+    }
+
+    .note-input-area input {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+
+    .note-input-area button {
+        padding: 10px 16px;
+        font-size: 14px;
+    }
+
+    /* Full email body */
+    .full-body-text {
+        max-height: 200px;
+        font-size: 11px;
+    }
+
+    /* --- Email Modal (full-screen on mobile) --- */
+    .modal-content {
+        width: 100%;
+        max-width: 100%;
+        max-height: 100vh;
+        height: 100vh;
+        border-radius: 0;
+    }
+
+    .modal-header { padding: 12px 16px; }
+    .modal-body { padding: 12px 16px; }
+    .modal-footer { padding: 12px 16px; }
+
+    .form-control {
+        padding: 10px 12px;
+        font-size: 14px;
+    }
+
+    textarea.form-control {
+        min-height: 200px;
+    }
+
+    .modal-footer .btn {
+        padding: 12px 20px;
+        font-size: 14px;
+    }
+}
+
+/* ============================================
+   SMALL MOBILE (< 400px)
+   ============================================ */
+@media (max-width: 400px) {
+    .header h1 { font-size: 15px; }
+    .stats-bar { grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; }
+    .stat-card { padding: 10px 12px; }
+    .stat-card .stat-number { font-size: 20px; }
+    .stat-card .stat-label { font-size: 9px; }
+    tbody td[data-label="Matter #"] .matter-num { font-size: 15px; }
 }
 
 /* Toast Notifications */
@@ -603,6 +913,16 @@ tbody td {
 @keyframes slideIn {
     from { transform: translateX(100%); opacity: 0; }
     to { transform: translateX(0); opacity: 1; }
+}
+
+/* Mobile toast */
+@media (max-width: 768px) {
+    .toast-container {
+        left: 12px;
+        right: 12px;
+        bottom: 12px;
+    }
+    .toast { max-width: none; }
 }
 
 /* Email Button */

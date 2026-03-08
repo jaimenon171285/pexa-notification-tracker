@@ -306,18 +306,18 @@ function renderTable() {
         return `
             <tr class="${isSelected ? "selected" : ""} ${isExpanded ? "expanded" : ""}"
                 onclick="toggleExpand(${n.id}, event)">
-                <td class="checkbox-cell" onclick="event.stopPropagation()">
+                <td class="checkbox-cell" data-label="" onclick="event.stopPropagation()">
                     <input type="checkbox" ${isSelected ? "checked" : ""}
                         onchange="toggleSelect(${n.id}, this.checked)">
                 </td>
-                <td><span class="matter-num">${escapeHtml(n.matter_number)}</span></td>
-                <td>${renderPriority(n.category)}</td>
-                <td>${escapeHtml(n.notification_type)}</td>
-                <td class="from-cell" title="${escapeHtml(n.message_from || '')}">${truncate(n.message_from || '', 25)}</td>
-                <td title="${escapeHtml(n.summary)}">${truncate(n.summary, 50)}</td>
-                <td>${formatDate(n.settlement_date)}</td>
-                <td>${formatDateTime(n.received_at)}</td>
-                <td>${renderStatus(n.status)}</td>
+                <td data-label="Matter #"><span class="matter-num">${escapeHtml(n.matter_number)}</span></td>
+                <td data-label="Priority">${renderPriority(n.category)}</td>
+                <td data-label="Type">${escapeHtml(n.notification_type)}</td>
+                <td data-label="From" class="from-cell" title="${escapeHtml(n.message_from || '')}">${truncate(n.message_from || '', 25)}</td>
+                <td data-label="Summary" title="${escapeHtml(n.summary)}">${truncate(n.summary, 60)}</td>
+                <td data-label="Settlement">${formatDate(n.settlement_date)}</td>
+                <td data-label="Received">${formatDateTime(n.received_at)}</td>
+                <td data-label="Status">${renderStatus(n.status)}</td>
             </tr>
             <tr class="detail-panel ${isExpanded ? "open" : ""}" id="detail-${n.id}">
                 <td colspan="9">
@@ -518,6 +518,13 @@ function setUser() {
     const select = document.getElementById("user-select");
     state.currentUser = select.value;
     localStorage.setItem("pexaUser", state.currentUser);
+}
+
+function toggleFilters() {
+    const bar = document.getElementById("filters-bar");
+    const icon = document.getElementById("filter-toggle-icon");
+    bar.classList.toggle("mobile-open");
+    icon.innerHTML = bar.classList.contains("mobile-open") ? "&#9650;" : "&#9660;";
 }
 
 // --- Sorting ---

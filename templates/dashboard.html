@@ -2,7 +2,9 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>PEXA Notification Tracker</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -49,8 +51,13 @@
         </div>
     </div>
 
+    <!-- Filter Toggle (mobile only) -->
+    <button id="filter-toggle" class="filter-toggle" onclick="toggleFilters()">
+        Filters <span id="filter-toggle-icon">&#9660;</span>
+    </button>
+
     <!-- Filters -->
-    <div class="filters-bar">
+    <div class="filters-bar" id="filters-bar">
         <div class="filter-group">
             <label>Matter #</label>
             <input type="text" id="filter-matter" class="filter-input" placeholder="e.g. 71571" style="width:120px">
