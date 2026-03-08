@@ -1047,3 +1047,38 @@ textarea.form-control {
     opacity: 0.5;
     cursor: not-allowed;
 }
+
+/* Recipient chips for multi-select email */
+.recipient-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.recipient-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #e8e0f7;
+    color: #5b21b6;
+    padding: 4px 10px;
+    border-radius: 16px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.recipient-chip button {
+    background: none;
+    border: none;
+    color: #7c3aed;
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 2px;
+    line-height: 1;
+    font-weight: bold;
+}
+
+.recipient-chip button:hover {
+    color: #e74c3c;
+}

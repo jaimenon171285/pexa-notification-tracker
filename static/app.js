@@ -91,13 +91,39 @@ async function addNote(id) {
 
 // --- Email Task ---
 
+// Track selected recipients for the email modal
+let emailRecipients = [];
+
+function addEmailRecipient(email, name) {
+    email = email.trim();
+    if (!email) return;
+    // Avoid duplicates
+    if (emailRecipients.some(r => r.email === email)) return;
+    emailRecipients.push({ email, name: name || email });
+    renderRecipientChips();
+}
+
+function removeEmailRecipient(email) {
+    emailRecipients = emailRecipients.filter(r => r.email !== email);
+    renderRecipientChips();
+}
+
+function renderRecipientChips() {
+    const container = document.getElementById("recipient-chips");
+    if (!container) return;
+    container.innerHTML = emailRecipients.map(r =>
+        `<span class="recipient-chip">${escapeHtml(r.name)} <button type="button" onclick="removeEmailRecipient('${r.email}')">&times;</button></span>`
+    ).join("");
+}
+
 function openEmailModal(id) {
     const n = state.notifications.find(x => x.id === id);
     if (!n) return;
     state.emailModalNotification = n;
+    emailRecipients = [];
 
-    const recipientOptions = STAFF_LIST.map(s =>
-        `<option value="${s.email}">${s.name} (${s.email})</option>`
+    const staffOptions = STAFF_LIST.map(s =>
+        `<option value="${s.email}" data-name="${s.name}">${s.name} (${s.email})</option>`
     ).join("");
 
     const defaultMessage = `Hi,\n\nPlease action the following PEXA notification:\n\n` +
@@ -119,12 +145,19 @@ function openEmailModal(id) {
             </div>
             <div class="modal-body">
                 <div class="form-group">
-                    <label>To</label>
-                    <select id="email-to" class="form-control">
-                        <option value="">Select recipient...</option>
-                        ${recipientOptions}
-                    </select>
-                    <input type="email" id="email-to-custom" class="form-control" placeholder="Or type email address..." style="margin-top:6px">
+                    <label>To <span style="font-weight:normal;color:#888;font-size:12px">(select multiple from list and/or type emails)</span></label>
+                    <div id="recipient-chips" class="recipient-chips"></div>
+                    <div style="display:flex;gap:6px;margin-top:4px">
+                        <select id="email-to-select" class="form-control" style="flex:1" onchange="onStaffSelect()">
+                            <option value="">+ Add from staff list...</option>
+                            ${staffOptions}
+                        </select>
+                    </div>
+                    <div style="display:flex;gap:6px;margin-top:6px">
+                        <input type="email" id="email-to-custom" class="form-control" placeholder="Type email address and press Add..." style="flex:1"
+                            onkeydown="if(event.key==='Enter'){event.preventDefault();onAddCustomEmail();}">
+                        <button type="button" class="btn btn-review" onclick="onAddCustomEmail()" style="white-space:nowrap;padding:6px 14px">Add</button>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>Subject</label>
@@ -144,22 +177,41 @@ function openEmailModal(id) {
     document.getElementById("email-modal").classList.add("open");
 }
 
+function onStaffSelect() {
+    const sel = document.getElementById("email-to-select");
+    if (!sel.value) return;
+    const opt = sel.options[sel.selectedIndex];
+    addEmailRecipient(sel.value, opt.dataset.name || sel.value);
+    sel.value = "";
+}
+
+function onAddCustomEmail() {
+    const input = document.getElementById("email-to-custom");
+    const email = input.value.trim();
+    if (!email) return;
+    // Basic email validation
+    if (!email.includes("@")) {
+        showToast("Please enter a valid email address", "error");
+        return;
+    }
+    addEmailRecipient(email);
+    input.value = "";
+}
+
 function closeEmailModal() {
     document.getElementById("email-modal").classList.remove("open");
     document.getElementById("email-modal").innerHTML = "";
     state.emailModalNotification = null;
+    emailRecipients = [];
 }
 
 async function sendTaskEmail(notificationId) {
-    const toSelect = document.getElementById("email-to").value;
-    const toCustom = document.getElementById("email-to-custom").value.trim();
-    const to = toCustom || toSelect;
-
-    if (!to) {
-        showToast("Please select or enter a recipient", "error");
+    if (emailRecipients.length === 0) {
+        showToast("Please add at least one recipient", "error");
         return;
     }
 
+    const toEmails = emailRecipients.map(r => r.email);
     const subject = document.getElementById("email-subject").value;
     const message = document.getElementById("email-message").value;
 
@@ -173,7 +225,7 @@ async function sendTaskEmail(notificationId) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 notification_id: notificationId,
-                to_email: to,
+                to_email: toEmails,
                 subject: subject,
                 message: message,
                 from_user: state.currentUser,
@@ -181,7 +233,7 @@ async function sendTaskEmail(notificationId) {
         });
         const data = await resp.json();
         if (data.success) {
-            showToast(`Task emailed to ${to}`, "success");
+            showToast(`Task emailed to ${toEmails.join(", ")}`, "success");
             closeEmailModal();
             await refreshAll();
         } else {

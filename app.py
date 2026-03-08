@@ -233,13 +233,21 @@ def _build_html_email(message, done_link=""):
 def api_send_task():
     data = request.json
     notification_id = data.get("notification_id")
-    to_email = data.get("to_email")
+    to_email = data.get("to_email")  # Can be a single string or a list of strings
     subject = data.get("subject")
     message = data.get("message")
     from_user = data.get("from_user", "Unknown")
 
-    if not to_email or not subject:
-        return jsonify({"error": "Recipient and subject required"}), 400
+    # Normalise to_email to a list
+    if isinstance(to_email, str):
+        to_list = [e.strip() for e in to_email.split(",") if e.strip()]
+    elif isinstance(to_email, list):
+        to_list = [e.strip() for e in to_email if e.strip()]
+    else:
+        to_list = []
+
+    if not to_list or not subject:
+        return jsonify({"error": "At least one recipient and subject required"}), 400
 
     try:
         # Generate "Mark as Done" link if we have a notification ID
@@ -255,15 +263,17 @@ def api_send_task():
         # Send via Graph API using the PEXA mailbox (HTML format)
         send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
         cc_address = os.getenv("CC_MAILBOX", "teams@legalworld.com.au")
-        graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox, cc_emails=cc_address, body_html=html_body)
+        graph_client.send_email(to_list, subject, message, from_mailbox=send_mailbox, cc_emails=cc_address, body_html=html_body)
 
         # Add a note and auto-set status to "reviewed" (To Review)
+        to_display = ", ".join(to_list)
         if notification_id:
-            add_note(notification_id, f"Task emailed to {to_email} by {from_user} (with Mark as Done link)", from_user)
+            add_note(notification_id, f"Task emailed to {to_display} by {from_user} (with Mark as Done link)", from_user)
             update_notification_status(notification_id, "reviewed", from_user)
-            update_emailed_info(notification_id, to_email, datetime.utcnow().isoformat())
+            # Track the first recipient for 48-hour reminder follow-up
+            update_emailed_info(notification_id, to_display, datetime.utcnow().isoformat())
 
-        logger.info(f"Task email sent to {to_email} for notification {notification_id} by {from_user} - status set to reviewed")
+        logger.info(f"Task email sent to {to_display} for notification {notification_id} by {from_user} - status set to reviewed")
         return jsonify({"success": True})
     except Exception as e:
         logger.error(f"Failed to send task email: {e}")
@@ -383,7 +393,8 @@ def check_overdue_tasks():
         for task in overdue:
             try:
                 nid = task["id"]
-                to_email = task["emailed_to"]
+                # emailed_to may contain multiple comma-separated addresses
+                to_email = [e.strip() for e in task["emailed_to"].split(",") if e.strip()]
                 matter = task.get("matter_number", "Unknown")
                 ntype = task.get("notification_type", "PEXA Notification")
                 summary = task.get("summary", "")[:200]
@@ -435,10 +446,11 @@ def check_overdue_tasks():
 
                 # Mark reminder as sent so we don't send again
                 mark_reminder_sent(nid)
-                add_note(nid, f"48-hour reminder sent to {to_email}", "System")
+                to_display = ", ".join(to_email) if isinstance(to_email, list) else to_email
+                add_note(nid, f"48-hour reminder sent to {to_display}", "System")
 
                 reminder_count += 1
-                logger.info(f"Reminder sent to {to_email} for notification {nid} (Matter #{matter})")
+                logger.info(f"Reminder sent to {to_display} for notification {nid} (Matter #{matter})")
 
             except Exception as e:
                 logger.error(f"Failed to send reminder for notification {task['id']}: {e}")

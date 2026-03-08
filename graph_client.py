@@ -152,22 +152,26 @@ class GraphClient:
 
     def send_email(self, to_email, subject, body_text, from_mailbox=None, cc_emails=None, body_html=None):
         """Send an email via Graph API using the specified mailbox.
-        If body_html is provided, sends as HTML. Otherwise sends as plain text."""
+        If body_html is provided, sends as HTML. Otherwise sends as plain text.
+        to_email can be a single address string or a list of addresses."""
         sender = from_mailbox or self.mailbox
         url = f"{GRAPH_API_BASE}/users/{sender}/sendMail"
         if body_html:
             body_payload = {"contentType": "HTML", "content": body_html}
         else:
             body_payload = {"contentType": "Text", "content": body_text}
+
+        # Support single or multiple TO recipients
+        if isinstance(to_email, str):
+            to_list = [to_email]
+        else:
+            to_list = list(to_email)
+
         message = {
             "subject": subject,
             "body": body_payload,
             "toRecipients": [
-                {
-                    "emailAddress": {
-                        "address": to_email,
-                    }
-                }
+                {"emailAddress": {"address": addr.strip()}} for addr in to_list if addr.strip()
             ],
         }
 
