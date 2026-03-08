@@ -1,55 +1,19 @@
 import os
 import re
+import sqlite3
 from datetime import datetime
 
-# --- Dual-mode database: PostgreSQL (Render) or SQLite (local dev) ---
+# --- SQLite database path ---
+# Use DB_PATH env var if set (for Render persistent disk), otherwise store next to app
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "pexa_tracker.db"))
 
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-# Render provides "postgres://" but psycopg2 requires "postgresql://"
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-USE_PG = DATABASE_URL is not None
-
-if USE_PG:
-    import psycopg2
-    import psycopg2.extras
-    DBIntegrityError = psycopg2.IntegrityError
-else:
-    import sqlite3
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pexa_tracker.db")
-    DBIntegrityError = sqlite3.IntegrityError
-
-
-# --- Connection and helpers ---
 
 def get_db():
-    if USE_PG:
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.autocommit = False
-        return conn
-    else:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        return conn
-
-
-def _cursor(conn):
-    """Return a cursor that produces dict-like rows."""
-    if USE_PG:
-        return conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-    else:
-        return conn.cursor()
-
-
-def _param(sql):
-    """Convert ? placeholders to %s for PostgreSQL."""
-    if USE_PG:
-        return sql.replace("?", "%s")
-    return sql
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
 
 
 def _fetchall(cur):
@@ -67,64 +31,36 @@ def _fetchone(cur):
 
 def init_db():
     conn = get_db()
-    cur = _cursor(conn)
+    cur = conn.cursor()
 
-    if USE_PG:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                id SERIAL PRIMARY KEY,
-                email_id TEXT UNIQUE,
-                received_at TEXT,
-                subject TEXT,
-                matter_number TEXT,
-                settlement_date TEXT,
-                workspace_number TEXT,
-                workspace_status TEXT,
-                notification_type TEXT,
-                summary TEXT,
-                sender TEXT,
-                full_body TEXT,
-                category TEXT DEFAULT 'info',
-                status TEXT DEFAULT 'new',
-                assigned_to TEXT,
-                notes TEXT DEFAULT '',
-                actioned_by TEXT,
-                actioned_at TEXT,
-                message_from TEXT DEFAULT '',
-                action_token TEXT DEFAULT '',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-    else:
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS notifications (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email_id TEXT UNIQUE,
-                received_at TEXT,
-                subject TEXT,
-                matter_number TEXT,
-                settlement_date TEXT,
-                workspace_number TEXT,
-                workspace_status TEXT,
-                notification_type TEXT,
-                summary TEXT,
-                sender TEXT,
-                full_body TEXT,
-                category TEXT DEFAULT 'info',
-                status TEXT DEFAULT 'new',
-                assigned_to TEXT,
-                notes TEXT DEFAULT '',
-                actioned_by TEXT,
-                actioned_at TEXT,
-                message_from TEXT DEFAULT '',
-                action_token TEXT DEFAULT '',
-                created_at TEXT DEFAULT (datetime('now')),
-                updated_at TEXT DEFAULT (datetime('now'))
-            )
-        """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id TEXT UNIQUE,
+            received_at TEXT,
+            subject TEXT,
+            matter_number TEXT,
+            settlement_date TEXT,
+            workspace_number TEXT,
+            workspace_status TEXT,
+            notification_type TEXT,
+            summary TEXT,
+            sender TEXT,
+            full_body TEXT,
+            category TEXT DEFAULT 'info',
+            status TEXT DEFAULT 'new',
+            assigned_to TEXT,
+            notes TEXT DEFAULT '',
+            actioned_by TEXT,
+            actioned_at TEXT,
+            message_from TEXT DEFAULT '',
+            action_token TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now')),
+            updated_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
 
-    # Indexes (syntax identical for both)
+    # Indexes
     for idx_sql in [
         "CREATE INDEX IF NOT EXISTS idx_matter_number ON notifications(matter_number)",
         "CREATE INDEX IF NOT EXISTS idx_status ON notifications(status)",
@@ -134,18 +70,14 @@ def init_db():
         cur.execute(idx_sql)
 
     # Migrations: add columns if they don't exist
-    if USE_PG:
-        cur.execute("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message_from TEXT DEFAULT ''")
-        cur.execute("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS action_token TEXT DEFAULT ''")
-    else:
-        try:
-            cur.execute("ALTER TABLE notifications ADD COLUMN message_from TEXT DEFAULT ''")
-        except Exception:
-            pass
-        try:
-            cur.execute("ALTER TABLE notifications ADD COLUMN action_token TEXT DEFAULT ''")
-        except Exception:
-            pass
+    try:
+        cur.execute("ALTER TABLE notifications ADD COLUMN message_from TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        cur.execute("ALTER TABLE notifications ADD COLUMN action_token TEXT DEFAULT ''")
+    except Exception:
+        pass
 
     conn.commit()
 
@@ -159,7 +91,7 @@ def init_db():
 
 def _backfill_message_from(conn):
     """Extract message_from from full_body for existing records that don't have it set."""
-    cur = _cursor(conn)
+    cur = conn.cursor()
     cur.execute(
         "SELECT id, full_body, summary FROM notifications WHERE (message_from IS NULL OR message_from = '')"
     )
@@ -168,7 +100,7 @@ def _backfill_message_from(conn):
         text = row["full_body"] or row["summary"] or ""
         sender = _extract_from_party(text)
         if sender:
-            cur.execute(_param("UPDATE notifications SET message_from = ? WHERE id = ?"), (sender, row["id"]))
+            cur.execute("UPDATE notifications SET message_from = ? WHERE id = ?", (sender, row["id"]))
     cur.close()
 
 
@@ -199,16 +131,16 @@ def _extract_from_party(text):
 def insert_notification(data):
     """Insert a new notification. Returns True if inserted, False if duplicate."""
     conn = get_db()
-    cur = _cursor(conn)
+    cur = conn.cursor()
     try:
-        cur.execute(_param("""
+        cur.execute("""
             INSERT INTO notifications (
                 email_id, received_at, subject, matter_number,
                 settlement_date, workspace_number, workspace_status,
                 notification_type, summary, sender, full_body, category,
                 message_from
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """), (
+        """, (
             data["email_id"], data["received_at"], data["subject"],
             data["matter_number"], data["settlement_date"],
             data["workspace_number"], data["workspace_status"],
@@ -218,8 +150,7 @@ def insert_notification(data):
         ))
         conn.commit()
         return True
-    except DBIntegrityError:
-        conn.rollback()
+    except sqlite3.IntegrityError:
         return False
     finally:
         cur.close()
@@ -229,7 +160,7 @@ def insert_notification(data):
 def get_notifications(filters=None):
     """Get notifications with optional filters."""
     conn = get_db()
-    cur = _cursor(conn)
+    cur = conn.cursor()
     query = "SELECT * FROM notifications WHERE 1=1"
     params = []
 
@@ -262,7 +193,7 @@ def get_notifications(filters=None):
         query += " LIMIT ?"
         params.append(filters["limit"])
 
-    cur.execute(_param(query), params)
+    cur.execute(query, params)
     rows = _fetchall(cur)
     cur.close()
     conn.close()
@@ -271,8 +202,8 @@ def get_notifications(filters=None):
 
 def get_notification(notification_id):
     conn = get_db()
-    cur = _cursor(conn)
-    cur.execute(_param("SELECT * FROM notifications WHERE id = ?"), (notification_id,))
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM notifications WHERE id = ?", (notification_id,))
     row = _fetchone(cur)
     cur.close()
     conn.close()
@@ -281,7 +212,7 @@ def get_notification(notification_id):
 
 def update_notification_status(notification_id, status, user=None, notes=None):
     conn = get_db()
-    cur = _cursor(conn)
+    cur = conn.cursor()
     now = datetime.utcnow().isoformat()
 
     updates = ["status = ?", "updated_at = ?"]
@@ -298,7 +229,7 @@ def update_notification_status(notification_id, status, user=None, notes=None):
         params.append(notes)
 
     params.append(notification_id)
-    cur.execute(_param(f"UPDATE notifications SET {', '.join(updates)} WHERE id = ?"), params)
+    cur.execute(f"UPDATE notifications SET {', '.join(updates)} WHERE id = ?", params)
     conn.commit()
     cur.close()
     conn.close()
@@ -306,9 +237,9 @@ def update_notification_status(notification_id, status, user=None, notes=None):
 
 def update_notification_assignment(notification_id, assigned_to):
     conn = get_db()
-    cur = _cursor(conn)
+    cur = conn.cursor()
     cur.execute(
-        _param("UPDATE notifications SET assigned_to = ?, updated_at = ? WHERE id = ?"),
+        "UPDATE notifications SET assigned_to = ?, updated_at = ? WHERE id = ?",
         (assigned_to, datetime.utcnow().isoformat(), notification_id)
     )
     conn.commit()
@@ -318,8 +249,8 @@ def update_notification_assignment(notification_id, assigned_to):
 
 def add_note(notification_id, note_text, user):
     conn = get_db()
-    cur = _cursor(conn)
-    cur.execute(_param("SELECT notes FROM notifications WHERE id = ?"), (notification_id,))
+    cur = conn.cursor()
+    cur.execute("SELECT notes FROM notifications WHERE id = ?", (notification_id,))
     existing = _fetchone(cur)
     if existing:
         current_notes = existing["notes"] or ""
@@ -327,7 +258,7 @@ def add_note(notification_id, note_text, user):
         new_note = f"[{timestamp} - {user}] {note_text}"
         updated_notes = f"{current_notes}\n{new_note}".strip()
         cur.execute(
-            _param("UPDATE notifications SET notes = ?, updated_at = ? WHERE id = ?"),
+            "UPDATE notifications SET notes = ?, updated_at = ? WHERE id = ?",
             (updated_notes, datetime.utcnow().isoformat(), notification_id)
         )
         conn.commit()
@@ -337,12 +268,12 @@ def add_note(notification_id, note_text, user):
 
 def get_stats():
     conn = get_db()
-    cur = _cursor(conn)
+    cur = conn.cursor()
     stats = {}
 
     for category in ("action_required", "review", "info"):
         cur.execute(
-            _param("SELECT COUNT(*) as count FROM notifications WHERE category = ? AND status NOT IN ('actioned', 'dismissed')"),
+            "SELECT COUNT(*) as count FROM notifications WHERE category = ? AND status NOT IN ('actioned', 'dismissed')",
             (category,)
         )
         row = _fetchone(cur)
