@@ -363,7 +363,7 @@ function renderDetail(n) {
                 ${n.notes ? `<div class="existing-notes">${escapeHtml(n.notes)}</div>` : ""}
 
                 <h4 style="margin-top:16px">Full Email Content</h4>
-                <div class="full-body-text">${escapeHtml(n.full_body || "No content available")}</div>
+                <div class="full-body-text">${formatFullBody(n.full_body)}</div>
             </div>
         </div>`;
 }
@@ -550,6 +550,57 @@ function updateSortIndicators() {
 }
 
 // --- Helpers ---
+
+function formatFullBody(text) {
+    if (!text) return "No content available";
+
+    // Try to find message body in "New Message" type PEXA notifications
+    // The message sits between "Subject: ..." and "Note: Sensitive data..."
+    const lines = text.split('\n');
+    let subjectLineIdx = -1;
+    let noteLineIdx = -1;
+    let subscriberRefIdx = -1;
+
+    for (let i = 0; i < lines.length; i++) {
+        const trimmed = lines[i].trim().toLowerCase();
+        if (trimmed.startsWith('subject:') && subjectLineIdx === -1) {
+            subjectLineIdx = i;
+        }
+        if (trimmed.startsWith('note:') && trimmed.includes('sensitive data') && noteLineIdx === -1) {
+            noteLineIdx = i;
+        }
+        if (trimmed.match(/^subscriber\s+ref/) && subscriberRefIdx === -1) {
+            subscriberRefIdx = i;
+        }
+    }
+
+    // Determine message boundaries
+    let msgStart = -1;
+    let msgEnd = -1;
+
+    if (subjectLineIdx >= 0) {
+        msgStart = subjectLineIdx + 1;
+        msgEnd = noteLineIdx >= 0 ? noteLineIdx : (subscriberRefIdx >= 0 ? subscriberRefIdx : -1);
+    }
+
+    if (msgStart >= 0 && msgEnd > msgStart) {
+        // Extract message lines (trim empty lines from start/end)
+        let messageLines = lines.slice(msgStart, msgEnd);
+        while (messageLines.length > 0 && messageLines[0].trim() === '') messageLines.shift();
+        while (messageLines.length > 0 && messageLines[messageLines.length - 1].trim() === '') messageLines.pop();
+
+        if (messageLines.length > 0) {
+            const before = lines.slice(0, msgStart).map(l => escapeHtml(l)).join('\n');
+            const message = messageLines.map(l => escapeHtml(l)).join('\n');
+            const after = lines.slice(msgEnd).map(l => escapeHtml(l)).join('\n');
+
+            return before + '\n<div class="message-body-highlight">' + message + '</div>\n' + after;
+        }
+    }
+
+    // Fallback: no message body identified, return as plain escaped text
+    return escapeHtml(text);
+}
 
 function escapeHtml(str) {
     if (!str) return "";
