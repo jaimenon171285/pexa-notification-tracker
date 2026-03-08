@@ -17,6 +17,8 @@ const state = {
     sortDir: "desc",
     autoRefreshInterval: null,
     emailModalNotification: null,
+    nextSyncTime: null,
+    countdownInterval: null,
 };
 
 // --- API Calls ---
@@ -236,11 +238,51 @@ function renderStats(stats) {
 
     const syncEl = document.getElementById("sync-info");
     if (stats.last_sync_time) {
+        // Server sends Sydney time - display it directly
         const syncTime = new Date(stats.last_sync_time);
-        syncEl.textContent = `Last sync: ${syncTime.toLocaleTimeString()} - ${stats.last_sync}`;
+        const timeStr = syncTime.toLocaleTimeString("en-AU", {
+            hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true,
+            timeZone: "Australia/Sydney"
+        });
+        syncEl.innerHTML = `Last sync: ${timeStr} - ${stats.last_sync} | <span id="countdown" class="countdown"></span>`;
     } else {
-        syncEl.textContent = stats.last_sync || "Never synced";
+        syncEl.innerHTML = stats.last_sync || "Never synced";
     }
+
+    // Set up countdown timer
+    if (stats.next_sync_time) {
+        state.nextSyncTime = new Date(stats.next_sync_time);
+        startCountdown();
+    }
+}
+
+function startCountdown() {
+    // Clear any existing countdown
+    if (state.countdownInterval) {
+        clearInterval(state.countdownInterval);
+    }
+    updateCountdown();
+    state.countdownInterval = setInterval(updateCountdown, 1000);
+}
+
+function updateCountdown() {
+    const el = document.getElementById("countdown");
+    if (!el || !state.nextSyncTime) return;
+
+    const now = new Date();
+    // Convert current time to Sydney for comparison
+    const nowSydney = new Date(now.toLocaleString("en-US", { timeZone: "Australia/Sydney" }));
+    const nextSydney = new Date(state.nextSyncTime);
+    const diffMs = nextSydney - nowSydney;
+
+    if (diffMs <= 0) {
+        el.textContent = "Syncing soon...";
+        return;
+    }
+
+    const mins = Math.floor(diffMs / 60000);
+    const secs = Math.floor((diffMs % 60000) / 1000);
+    el.textContent = `Next sync: ${mins}m ${secs.toString().padStart(2, "0")}s`;
 }
 
 function renderTable() {

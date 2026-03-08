@@ -2,7 +2,8 @@ import os
 import hmac
 import hashlib
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from flask import Flask, render_template, jsonify, request, make_response
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -17,6 +18,8 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+SYDNEY_TZ = ZoneInfo("Australia/Sydney")
+
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-me")
 
@@ -25,22 +28,23 @@ last_sync_time = None
 last_sync_status = "Never synced"
 
 
+def _now_sydney():
+    """Get current time in Sydney timezone."""
+    return datetime.now(SYDNEY_TZ)
+
+
 def sync_emails():
     """Fetch new emails from Graph API, parse them, and store in database.
-    After processing, moves emails to a 'Processed' subfolder to avoid duplicates."""
+    After processing, moves emails to a 'Processed' subfolder to avoid duplicates.
+    Always fetches ALL emails from the folder (no date filter) because processed
+    emails are moved to the Processed subfolder, so only unprocessed emails remain."""
     global last_sync_time, last_sync_status
     try:
-        # On first sync, fetch ALL emails in the folder (no date filter)
-        # On subsequent syncs, only fetch recent emails
-        since = None
-        if last_sync_time:
-            # Go back a bit to catch any we might have missed
-            since = (last_sync_time - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            logger.info(f"Syncing emails since {since}...")
-        else:
-            logger.info("First sync - fetching ALL emails from folder...")
-
-        emails = graph_client.fetch_emails(since=since, max_results=100)
+        # Always fetch ALL emails from the folder - no date filter needed.
+        # Processed emails are moved to the "Processed" subfolder after import,
+        # so only unprocessed emails remain in the main folder.
+        logger.info("Fetching all emails from PEXA folder...")
+        emails = graph_client.fetch_emails(since=None, max_results=100)
 
         new_count = 0
         moved_count = 0
@@ -62,7 +66,7 @@ def sync_emails():
             if graph_client.move_email_to_archive(email["id"]):
                 moved_count += 1
 
-        last_sync_time = datetime.utcnow()
+        last_sync_time = _now_sydney()
         last_sync_status = f"OK - {new_count} new notifications"
         logger.info(f"Sync complete: {new_count} new notifications from {len(emails)} emails, {moved_count} moved to Processed")
         return new_count
@@ -144,7 +148,14 @@ def api_add_note(notification_id):
 def api_stats():
     stats = get_stats()
     stats["last_sync"] = last_sync_status
-    stats["last_sync_time"] = last_sync_time.isoformat() if last_sync_time else None
+    stats["sync_interval_minutes"] = sync_interval
+    if last_sync_time:
+        stats["last_sync_time"] = last_sync_time.isoformat()
+        next_sync = last_sync_time + timedelta(minutes=sync_interval)
+        stats["next_sync_time"] = next_sync.isoformat()
+    else:
+        stats["last_sync_time"] = None
+        stats["next_sync_time"] = None
     return jsonify(stats)
 
 
