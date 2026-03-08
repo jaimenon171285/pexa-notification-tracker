@@ -30,15 +30,16 @@ def sync_emails():
     After processing, moves emails to a 'Processed' subfolder to avoid duplicates."""
     global last_sync_time, last_sync_status
     try:
-        # Fetch emails from last 7 days on first sync, then from last sync time
+        # On first sync, fetch ALL emails in the folder (no date filter)
+        # On subsequent syncs, only fetch recent emails
         since = None
         if last_sync_time:
             # Go back a bit to catch any we might have missed
             since = (last_sync_time - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            logger.info(f"Syncing emails since {since}...")
         else:
-            since = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            logger.info("First sync - fetching ALL emails from folder...")
 
-        logger.info(f"Syncing emails since {since}...")
         emails = graph_client.fetch_emails(since=since, max_results=100)
 
         new_count = 0

@@ -266,6 +266,17 @@ def add_note(notification_id, note_text, user):
     conn.close()
 
 
+def get_notification_count():
+    """Return total number of notifications in the database."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) as count FROM notifications")
+    row = _fetchone(cur)
+    cur.close()
+    conn.close()
+    return row["count"]
+
+
 def get_stats():
     conn = get_db()
     cur = conn.cursor()

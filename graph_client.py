@@ -235,6 +235,78 @@ class GraphClient:
             logger.warning(f"Failed to move email {message_id[:20]}... to archive: {e}")
             return False
 
+    def fetch_emails_from_archive(self, since=None, max_results=200):
+        """Fetch emails from the Processed/archive subfolder.
+        Used for re-importing when database is empty but emails were already archived."""
+        try:
+            archive_id = self._get_or_create_archive_folder()
+        except Exception as e:
+            logger.info(f"No archive folder found, skipping archive import: {e}")
+            return []
+
+        url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders/{archive_id}/messages"
+        params = {
+            "$top": max_results,
+            "$orderby": "receivedDateTime desc",
+            "$select": "id,subject,body,bodyPreview,receivedDateTime,from,isRead",
+        }
+        if since:
+            params["$filter"] = f"receivedDateTime ge {since}"
+
+        try:
+            data = self._request("GET", url, params=params)
+        except Exception as e:
+            logger.warning(f"Failed to fetch from archive: {e}")
+            return []
+
+        emails = []
+        for msg in data.get("value", []):
+            sender_email = ""
+            sender_name = ""
+            if msg.get("from", {}).get("emailAddress"):
+                sender_email = msg["from"]["emailAddress"].get("address", "")
+                sender_name = msg["from"]["emailAddress"].get("name", "")
+            body = msg.get("body", {})
+            emails.append({
+                "id": msg["id"],
+                "subject": msg.get("subject", ""),
+                "body_html": body.get("content", "") if body.get("contentType") == "html" else "",
+                "body_text": body.get("content", "") if body.get("contentType") == "text" else "",
+                "body_preview": msg.get("bodyPreview", ""),
+                "received_at": msg.get("receivedDateTime", ""),
+                "sender_email": sender_email,
+                "sender_name": sender_name,
+            })
+
+        # Handle pagination
+        next_link = data.get("@odata.nextLink")
+        while next_link and len(emails) < max_results:
+            try:
+                data = self._request("GET", next_link)
+            except Exception:
+                break
+            for msg in data.get("value", []):
+                sender_email = ""
+                sender_name = ""
+                if msg.get("from", {}).get("emailAddress"):
+                    sender_email = msg["from"]["emailAddress"].get("address", "")
+                    sender_name = msg["from"]["emailAddress"].get("name", "")
+                body = msg.get("body", {})
+                emails.append({
+                    "id": msg["id"],
+                    "subject": msg.get("subject", ""),
+                    "body_html": body.get("content", "") if body.get("contentType") == "html" else "",
+                    "body_text": body.get("content", "") if body.get("contentType") == "text" else "",
+                    "body_preview": msg.get("bodyPreview", ""),
+                    "received_at": msg.get("receivedDateTime", ""),
+                    "sender_email": sender_email,
+                    "sender_name": sender_name,
+                })
+            next_link = data.get("@odata.nextLink")
+
+        logger.info(f"Fetched {len(emails)} emails from archive/Processed folder")
+        return emails
+
     def test_connection(self):
         """Test the Graph API connection and return status info."""
         try:
