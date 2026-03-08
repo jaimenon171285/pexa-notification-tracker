@@ -150,25 +150,35 @@ class GraphClient:
 
         return emails
 
-    def send_email(self, to_email, subject, body_text, from_mailbox=None):
+    def send_email(self, to_email, subject, body_text, from_mailbox=None, cc_emails=None):
         """Send an email via Graph API using the specified mailbox."""
         sender = from_mailbox or self.mailbox
         url = f"{GRAPH_API_BASE}/users/{sender}/sendMail"
-        payload = {
-            "message": {
-                "subject": subject,
-                "body": {
-                    "contentType": "Text",
-                    "content": body_text,
-                },
-                "toRecipients": [
-                    {
-                        "emailAddress": {
-                            "address": to_email,
-                        }
-                    }
-                ],
+        message = {
+            "subject": subject,
+            "body": {
+                "contentType": "Text",
+                "content": body_text,
             },
+            "toRecipients": [
+                {
+                    "emailAddress": {
+                        "address": to_email,
+                    }
+                }
+            ],
+        }
+
+        # Add CC recipients if provided
+        if cc_emails:
+            if isinstance(cc_emails, str):
+                cc_emails = [cc_emails]
+            message["ccRecipients"] = [
+                {"emailAddress": {"address": email}} for email in cc_emails
+            ]
+
+        payload = {
+            "message": message,
             "saveToSentItems": True,
         }
         response = requests.post(url, headers=self._headers(), json=payload)

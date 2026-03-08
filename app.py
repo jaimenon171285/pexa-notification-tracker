@@ -192,7 +192,8 @@ def api_send_task():
 
         # Send via Graph API using the PEXA mailbox
         send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
-        graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox)
+        cc_address = os.getenv("CC_MAILBOX", "teams@legalworld.com.au")
+        graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox, cc_emails=cc_address)
 
         # Add a note to the notification recording the email
         if notification_id:
