@@ -176,6 +176,58 @@ def api_connection():
     return jsonify(status)
 
 
+def _build_html_email(message, done_link=""):
+    """Convert a plain-text task message into an HTML email.
+    The PEXA message content (between --- Full PEXA Message --- and --- End of Message ---)
+    is highlighted in bold red so the recipient can clearly see what needs to be done."""
+    import re as _re
+
+    # Split out the PEXA message section and make it bold + red
+    pexa_pattern = r"(--- Full PEXA Message ---\s*\n)(.*?)(\n\s*--- End of Message ---)"
+    match = _re.search(pexa_pattern, message, _re.DOTALL)
+
+    if match:
+        before = message[:match.start()]
+        pexa_header = match.group(1).strip()
+        pexa_content = match.group(2).strip()
+        pexa_footer = match.group(3).strip()
+        after = message[match.end():]
+
+        # Escape HTML in each section and convert newlines to <br>
+        before_html = before.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
+        pexa_content_html = pexa_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
+        after_html = after.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
+
+        body_html = f"""{before_html}
+<br><b>{pexa_header}</b><br><br>
+<div style="color: #cc0000; font-weight: bold; font-size: 15px; padding: 12px 16px; background: #fff5f5; border-left: 4px solid #cc0000; margin: 8px 0;">
+{pexa_content_html}
+</div>
+<br><b>{pexa_footer}</b><br>
+{after_html}"""
+    else:
+        # No PEXA section found — just convert the whole message
+        body_html = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
+
+    # Add the "Mark as Done" button if we have a link
+    if done_link:
+        body_html += f"""<br>
+<hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
+<div style="text-align: center; margin: 20px 0;">
+    <p style="font-size: 16px; font-weight: bold;">✅ MARK THIS TASK AS DONE</p>
+    <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Click Here When Done</a>
+    <p style="color: #666; font-size: 13px; margin-top: 12px;">Click the button above when you've completed this task.<br>It will automatically update the PEXA Tracker.</p>
+</div>
+<hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">"""
+
+    # Wrap in a basic HTML template
+    return f"""<html>
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">
+{body_html}
+</body>
+</html>"""
+
+
 @app.route("/api/send-task", methods=["POST"])
 def api_send_task():
     data = request.json
@@ -196,17 +248,13 @@ def api_send_task():
             base_url = request.host_url.rstrip("/")
             done_link = f"{base_url}/done/{notification_id}?token={token}"
 
-            # Append the "Mark as Done" link to the message
-            message += f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += f"✅ MARK THIS TASK AS DONE:\n{done_link}\n"
-            message += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            message += f"Click the link above when you've completed this task.\n"
-            message += f"It will automatically update the PEXA Tracker.\n"
+        # Build HTML email with PEXA message highlighted in bold red
+        html_body = _build_html_email(message, done_link)
 
-        # Send via Graph API using the PEXA mailbox
+        # Send via Graph API using the PEXA mailbox (HTML format)
         send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
         cc_address = os.getenv("CC_MAILBOX", "teams@legalworld.com.au")
-        graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox, cc_emails=cc_address)
+        graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox, cc_emails=cc_address, body_html=html_body)
 
         # Add a note and auto-set status to "reviewed" (To Review)
         if notification_id:
@@ -343,26 +391,45 @@ def check_overdue_tasks():
                 token = generate_action_token(nid)
                 done_link = f"{base_url}/done/{nid}?token={token}"
 
-                # Build reminder email
+                # Build reminder email (HTML)
                 subject = f"REMINDER: Outstanding PEXA Task - Matter #{matter}"
-                body = f"Hi,\n\n"
-                body += f"This is a reminder that the following PEXA task was sent to you over 48 hours ago and has not yet been marked as complete:\n\n"
-                body += f"Matter #: {matter}\n"
-                body += f"Type: {ntype}\n"
-                body += f"Summary: {summary}\n\n"
-                body += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                body += f"If you have completed this task, please click the link below to mark it as done:\n\n"
-                body += f"✅ MARK AS DONE: {done_link}\n\n"
-                body += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-                body += f"If this task has NOT been completed, or if you need help, please email:\n"
-                body += f"  • sheriff@legalworld.com.au\n"
-                body += f"  • jai@legalworld.com.au\n\n"
-                body += f"Please let them know what is happening with this task and if you require any assistance.\n\n"
-                body += f"Thank you,\nPEXA Notification Tracker\n"
+                # Escape HTML in dynamic content
+                safe_matter = str(matter).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                safe_ntype = str(ntype).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                safe_summary = str(summary).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+                reminder_html = f"""<html>
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">
+<p>Hi,</p>
+<p>This is a reminder that the following PEXA task was sent to you over 48 hours ago and has not yet been marked as complete:</p>
+
+<div style="color: #cc0000; font-weight: bold; font-size: 15px; padding: 12px 16px; background: #fff5f5; border-left: 4px solid #cc0000; margin: 12px 0;">
+    Matter #: {safe_matter}<br>
+    Type: {safe_ntype}<br>
+    Summary: {safe_summary}
+</div>
+
+<hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
+<div style="text-align: center; margin: 20px 0;">
+    <p style="font-size: 16px; font-weight: bold;">✅ If you have completed this task, click below to mark it as done:</p>
+    <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Mark As Done</a>
+</div>
+<hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
+
+<p>If this task has <b>NOT</b> been completed, or if you need help, please email:</p>
+<ul>
+    <li><a href="mailto:sheriff@legalworld.com.au">sheriff@legalworld.com.au</a></li>
+    <li><a href="mailto:jai@legalworld.com.au">jai@legalworld.com.au</a></li>
+</ul>
+<p>Please let them know what is happening with this task and if you require any assistance.</p>
+
+<p>Thank you,<br>PEXA Notification Tracker</p>
+</body>
+</html>"""
 
                 # Send reminder - CC Sheriff and Jai so they're aware
                 cc_emails = "sheriff@legalworld.com.au,jai@legalworld.com.au"
-                graph_client.send_email(to_email, subject, body, from_mailbox=send_mailbox, cc_emails=cc_emails)
+                graph_client.send_email(to_email, subject, "", from_mailbox=send_mailbox, cc_emails=cc_emails, body_html=reminder_html)
 
                 # Mark reminder as sent so we don't send again
                 mark_reminder_sent(nid)

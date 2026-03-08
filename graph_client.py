@@ -150,16 +150,18 @@ class GraphClient:
 
         return emails
 
-    def send_email(self, to_email, subject, body_text, from_mailbox=None, cc_emails=None):
-        """Send an email via Graph API using the specified mailbox."""
+    def send_email(self, to_email, subject, body_text, from_mailbox=None, cc_emails=None, body_html=None):
+        """Send an email via Graph API using the specified mailbox.
+        If body_html is provided, sends as HTML. Otherwise sends as plain text."""
         sender = from_mailbox or self.mailbox
         url = f"{GRAPH_API_BASE}/users/{sender}/sendMail"
+        if body_html:
+            body_payload = {"contentType": "HTML", "content": body_html}
+        else:
+            body_payload = {"contentType": "Text", "content": body_text}
         message = {
             "subject": subject,
-            "body": {
-                "contentType": "Text",
-                "content": body_text,
-            },
+            "body": body_payload,
             "toRecipients": [
                 {
                     "emailAddress": {
