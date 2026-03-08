@@ -166,6 +166,44 @@ def extract_message_sender(text):
     return None
 
 
+def extract_from_party(text):
+    """Extract the organization/party name that the PEXA notification is from."""
+    if not text:
+        return ""
+
+    # Pattern 1: "New message from COMPANY NAME" or "message from COMPANY NAME"
+    match = re.search(
+        r"(?:new\s+)?message\s+from\s+(.+?)(?:\n|:|subject|$)",
+        text, re.IGNORECASE
+    )
+    if match:
+        name = match.group(1).strip().rstrip('.')
+        if len(name) > 2 and name.upper() != "PEXA":
+            return name
+
+    # Pattern 2: Look for organization names in caps (common in PEXA messages)
+    match = re.search(
+        r"from\s+([A-Z][A-Z\s&.,()]+(?:PTY\s+LTD|LIMITED|LTD|CORP(?:ORATION)?|BANK|INC)?)",
+        text
+    )
+    if match:
+        name = match.group(1).strip().rstrip('.')
+        if len(name) > 2 and name.upper() != "PEXA":
+            return name
+
+    # Pattern 3: "conversation message received" - check for org names in the text
+    match = re.search(
+        r"(?:conversation|message).*(?:from|by)\s+([A-Z][A-Z\s&]+(?:PTY\s+LTD|LIMITED|LTD|BANK)?)",
+        text, re.IGNORECASE
+    )
+    if match:
+        name = match.group(1).strip().rstrip('.')
+        if len(name) > 2 and name.upper() != "PEXA":
+            return name
+
+    return ""
+
+
 def parse_pexa_email(email_id, subject, body_html, body_text, received_at, sender):
     """Parse a PEXA notification email and return structured data."""
     # Get plain text from HTML if needed
@@ -198,6 +236,9 @@ def parse_pexa_email(email_id, subject, body_html, body_text, received_at, sende
     if message_sender and notification_type == "New Message":
         summary = f"Message from {message_sender}: {summary}"
 
+    # Extract the "from" party (bank, law firm, etc.)
+    from_party = extract_from_party(text)
+
     return {
         "email_id": email_id,
         "received_at": received_at,
@@ -211,4 +252,5 @@ def parse_pexa_email(email_id, subject, body_html, body_text, received_at, sende
         "sender": sender or "",
         "full_body": text[:5000],
         "category": category,
+        "message_from": from_party or "",
     }

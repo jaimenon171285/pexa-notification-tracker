@@ -249,7 +249,7 @@ function renderTable() {
 
     if (notifications.length === 0) {
         tbody.innerHTML = `
-            <tr><td colspan="8" class="empty-state">
+            <tr><td colspan="9" class="empty-state">
                 <div class="empty-icon">📭</div>
                 <h3>No notifications found</h3>
                 <p>Try adjusting your filters or sync to check for new emails</p>
@@ -271,13 +271,14 @@ function renderTable() {
                 <td><span class="matter-num">${escapeHtml(n.matter_number)}</span></td>
                 <td>${renderPriority(n.category)}</td>
                 <td>${escapeHtml(n.notification_type)}</td>
-                <td title="${escapeHtml(n.summary)}">${truncate(n.summary, 60)}</td>
+                <td class="from-cell" title="${escapeHtml(n.message_from || '')}">${truncate(n.message_from || '', 25)}</td>
+                <td title="${escapeHtml(n.summary)}">${truncate(n.summary, 50)}</td>
                 <td>${formatDate(n.settlement_date)}</td>
                 <td>${formatDateTime(n.received_at)}</td>
                 <td>${renderStatus(n.status)}</td>
             </tr>
             <tr class="detail-panel ${isExpanded ? "open" : ""}" id="detail-${n.id}">
-                <td colspan="8">
+                <td colspan="9">
                     ${isExpanded ? renderDetail(n) : ""}
                 </td>
             </tr>`;
@@ -325,6 +326,11 @@ function renderDetail(n) {
                     <div class="field-label">Workspace</div>
                     <div class="field-value">${escapeHtml(n.workspace_number || "N/A")} (${escapeHtml(n.workspace_status || "N/A")})</div>
                 </div>
+                ${n.message_from ? `
+                <div class="detail-field">
+                    <div class="field-label">From</div>
+                    <div class="field-value">${escapeHtml(n.message_from)}</div>
+                </div>` : ""}
                 <div class="detail-field">
                     <div class="field-label">Subject</div>
                     <div class="field-value">${escapeHtml(n.subject)}</div>

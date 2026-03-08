@@ -1,8 +1,10 @@
 import os
+import hmac
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, make_response
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import init_db, get_notifications, get_notification, update_notification_status, \
@@ -166,13 +168,27 @@ def api_send_task():
         return jsonify({"error": "Recipient and subject required"}), 400
 
     try:
+        # Generate "Mark as Done" link if we have a notification ID
+        done_link = ""
+        if notification_id:
+            token = generate_action_token(notification_id)
+            base_url = request.host_url.rstrip("/")
+            done_link = f"{base_url}/done/{notification_id}?token={token}"
+
+            # Append the "Mark as Done" link to the message
+            message += f"\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"✅ MARK THIS TASK AS DONE:\n{done_link}\n"
+            message += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"Click the link above when you've completed this task.\n"
+            message += f"It will automatically update the PEXA Tracker.\n"
+
         # Send via Graph API using the PEXA mailbox
         send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
         graph_client.send_email(to_email, subject, message, from_mailbox=send_mailbox)
 
         # Add a note to the notification recording the email
         if notification_id:
-            add_note(notification_id, f"Task emailed to {to_email} by {from_user}", from_user)
+            add_note(notification_id, f"Task emailed to {to_email} by {from_user} (with Mark as Done link)", from_user)
 
         logger.info(f"Task email sent to {to_email} for notification {notification_id} by {from_user}")
         return jsonify({"success": True})
@@ -195,6 +211,83 @@ def api_bulk_action():
         update_notification_status(nid, action, user)
 
     return jsonify({"success": True, "count": len(ids)})
+
+
+# --- Mark as Done (from email link) ---
+
+def generate_action_token(notification_id):
+    """Generate a secure token for the 'Mark as Done' email link."""
+    secret = app.secret_key or "fallback-secret"
+    msg = f"done-{notification_id}".encode()
+    return hmac.new(secret.encode(), msg, hashlib.sha256).hexdigest()[:20]
+
+
+def verify_action_token(notification_id, token):
+    """Verify a 'Mark as Done' token."""
+    expected = generate_action_token(notification_id)
+    return hmac.compare_digest(expected, token)
+
+
+@app.route("/done/<int:notification_id>")
+def mark_done_from_email(notification_id):
+    """Handle the 'Mark as Done' link from task emails."""
+    token = request.args.get("token", "")
+
+    if not verify_action_token(notification_id, token):
+        return make_response("""
+        <!DOCTYPE html>
+        <html><head><title>Invalid Link</title>
+        <style>body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
+        .card{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);text-align:center;max-width:500px}
+        h2{color:#e74c3c}p{color:#666}</style></head>
+        <body><div class="card"><h2>Invalid Link</h2><p>This link is invalid or has expired. Please use the PEXA Tracker dashboard instead.</p></div></body></html>
+        """, 403)
+
+    notification = get_notification(notification_id)
+    if not notification:
+        return make_response("""
+        <!DOCTYPE html>
+        <html><head><title>Not Found</title>
+        <style>body{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
+        .card{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);text-align:center;max-width:500px}
+        h2{color:#e74c3c}p{color:#666}</style></head>
+        <body><div class="card"><h2>Notification Not Found</h2><p>This notification no longer exists.</p></div></body></html>
+        """, 404)
+
+    # Check if already actioned
+    if notification["status"] == "actioned":
+        return make_response(f"""
+        <!DOCTYPE html>
+        <html><head><title>Already Done</title>
+        <style>body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}}
+        .card{{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);text-align:center;max-width:500px}}
+        h2{{color:#3498db}}p{{color:#666}}.info{{background:#f0f8ff;padding:12px;border-radius:8px;margin:16px 0}}</style></head>
+        <body><div class="card"><h2>Already Marked as Done</h2>
+        <p>This task was already marked as actioned.</p>
+        <div class="info"><strong>Matter #{notification["matter_number"]}</strong><br>{notification["notification_type"]}</div>
+        <p>Actioned by {notification.get("actioned_by", "Unknown")} at {notification.get("actioned_at", "Unknown")}</p>
+        </div></body></html>
+        """, 200)
+
+    # Mark as actioned
+    update_notification_status(notification_id, "actioned", user="Via Email Link")
+    add_note(notification_id, "Marked as done via email link", "Email Link")
+    logger.info(f"Notification {notification_id} marked as done via email link")
+
+    return make_response(f"""
+    <!DOCTYPE html>
+    <html><head><title>Task Complete</title>
+    <style>body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}}
+    .card{{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);text-align:center;max-width:500px}}
+    h2{{color:#27ae60}}.check{{font-size:64px;margin-bottom:16px}}p{{color:#666}}
+    .info{{background:#f0fff4;padding:12px;border-radius:8px;margin:16px 0}}</style></head>
+    <body><div class="card">
+    <div class="check">✅</div>
+    <h2>Task Marked as Done!</h2>
+    <div class="info"><strong>Matter #{notification["matter_number"]}</strong><br>{notification["notification_type"]}<br>{notification["summary"][:100]}</div>
+    <p>This notification has been marked as actioned in the PEXA Tracker.</p>
+    </div></body></html>
+    """, 200)
 
 
 # --- Startup ---

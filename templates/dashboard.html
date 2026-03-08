@@ -97,6 +97,9 @@
                     <th data-sort="notification_type" onclick="sortBy('notification_type')">
                         Type <span class="sort-icon">&#8693;</span>
                     </th>
+                    <th data-sort="message_from" onclick="sortBy('message_from')">
+                        From <span class="sort-icon">&#8693;</span>
+                    </th>
                     <th>Summary</th>
                     <th data-sort="settlement_date" onclick="sortBy('settlement_date')">
                         Settlement <span class="sort-icon">&#8693;</span>
@@ -110,7 +113,7 @@
                 </tr>
             </thead>
             <tbody id="notifications-body">
-                <tr><td colspan="8" class="loading">
+                <tr><td colspan="9" class="loading">
                     <div class="spinner"></div>
                     <p style="margin-top:12px">Loading notifications...</p>
                 </td></tr>

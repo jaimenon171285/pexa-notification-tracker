@@ -365,6 +365,16 @@ tbody td {
     color: #4338ca;
 }
 
+/* From column */
+.from-cell {
+    font-size: 12px;
+    color: #4b5563;
+    max-width: 160px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 /* Detail Panel (expandable row) */
 .detail-panel {
     display: none;
