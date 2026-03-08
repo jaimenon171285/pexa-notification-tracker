@@ -4,6 +4,9 @@ const STAFF_LIST = [
     { name: "Jai", email: "jai@legalworld.com.au" },
     { name: "Sheriff", email: "sheriff@legalworld.com.au" },
     { name: "Zane", email: "zane@legalworld.com.au" },
+    { name: "Kavya", email: "kavya@legalworld.com.au" },
+    { name: "Shreya", email: "shreya@legalworld.com.au" },
+    { name: "Thaanya", email: "thaanya@legalworld.com.au" },
     { name: "Settlements", email: "settlements@legalworld.com.au" },
 ];
 
