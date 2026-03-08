@@ -491,6 +491,21 @@ function sortBy(field) {
     updateSortIndicators();
 }
 
+function parseSettlementDate(dateStr) {
+    // Parse Australian format: "14/04/2026 02:30 PM AEST" or "13/03/2026 02:00 PM AEDT"
+    if (!dateStr) return null;
+    const match = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})\s*(AM|PM))?/i);
+    if (!match) return null;
+    const day = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10) - 1;
+    const year = parseInt(match[3], 10);
+    let hours = match[4] ? parseInt(match[4], 10) : 0;
+    const minutes = match[5] ? parseInt(match[5], 10) : 0;
+    if (match[6] && match[6].toUpperCase() === "PM" && hours !== 12) hours += 12;
+    if (match[6] && match[6].toUpperCase() === "AM" && hours === 12) hours = 0;
+    return new Date(year, month, day, hours, minutes);
+}
+
 function sortNotifications(notifications) {
     return [...notifications].sort((a, b) => {
         let aVal = a[state.sortField] || "";
@@ -501,6 +516,18 @@ function sortNotifications(notifications) {
             const order = { action_required: 0, review: 1, info: 2 };
             aVal = order[aVal] ?? 3;
             bVal = order[bVal] ?? 3;
+        }
+
+        // Settlement date: parse as real dates for proper sorting
+        if (state.sortField === "settlement_date") {
+            const aDate = parseSettlementDate(aVal);
+            const bDate = parseSettlementDate(bVal);
+            // Push empty/null dates to the end
+            if (!aDate && !bDate) return 0;
+            if (!aDate) return 1;
+            if (!bDate) return -1;
+            aVal = aDate.getTime();
+            bVal = bDate.getTime();
         }
 
         if (aVal < bVal) return state.sortDir === "asc" ? -1 : 1;
