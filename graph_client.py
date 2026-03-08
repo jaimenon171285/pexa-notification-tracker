@@ -15,8 +15,10 @@ class GraphClient:
         self.client_secret = os.getenv("AZURE_CLIENT_SECRET")
         self.mailbox = os.getenv("PEXA_MAILBOX", "rahul@legalworld.com.au")
         self.folder_name = os.getenv("PEXA_FOLDER_NAME", "PEXA Notifications")
+        self.archive_folder_name = "Processed"
         self._token = None
         self._folder_id = None
+        self._archive_folder_id = None
 
     def _get_token(self):
         """Acquire an access token using client credentials flow."""
@@ -177,6 +179,51 @@ class GraphClient:
             return True
         response.raise_for_status()
         return True
+
+    def _get_or_create_archive_folder(self):
+        """Find or create the 'Processed' subfolder inside the PEXA folder."""
+        if self._archive_folder_id:
+            return self._archive_folder_id
+
+        parent_folder_id = self._find_folder_id()
+
+        # Check if 'Processed' subfolder already exists
+        url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders/{parent_folder_id}/childFolders"
+        try:
+            data = self._request("GET", url, params={"$top": 100})
+            for folder in data.get("value", []):
+                if folder["displayName"].lower() == self.archive_folder_name.lower():
+                    self._archive_folder_id = folder["id"]
+                    logger.info(f"Found existing archive folder: {self.archive_folder_name}")
+                    return self._archive_folder_id
+        except Exception as e:
+            logger.warning(f"Error checking for archive folder: {e}")
+
+        # Create the subfolder if it doesn't exist
+        try:
+            create_url = f"{GRAPH_API_BASE}/users/{self.mailbox}/mailFolders/{parent_folder_id}/childFolders"
+            result = self._request("POST", create_url, json={
+                "displayName": self.archive_folder_name,
+            })
+            self._archive_folder_id = result["id"]
+            logger.info(f"Created archive folder: {self.archive_folder_name}")
+            return self._archive_folder_id
+        except Exception as e:
+            logger.error(f"Failed to create archive folder: {e}")
+            raise
+
+    def move_email_to_archive(self, message_id):
+        """Move an email to the Processed/archive subfolder."""
+        try:
+            archive_id = self._get_or_create_archive_folder()
+            url = f"{GRAPH_API_BASE}/users/{self.mailbox}/messages/{message_id}/move"
+            self._request("POST", url, json={
+                "destinationId": archive_id,
+            })
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to move email {message_id[:20]}... to archive: {e}")
+            return False
 
     def test_connection(self):
         """Test the Graph API connection and return status info."""

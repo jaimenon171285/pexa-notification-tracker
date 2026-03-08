@@ -26,7 +26,8 @@ last_sync_status = "Never synced"
 
 
 def sync_emails():
-    """Fetch new emails from Graph API, parse them, and store in database."""
+    """Fetch new emails from Graph API, parse them, and store in database.
+    After processing, moves emails to a 'Processed' subfolder to avoid duplicates."""
     global last_sync_time, last_sync_status
     try:
         # Fetch emails from last 7 days on first sync, then from last sync time
@@ -41,6 +42,7 @@ def sync_emails():
         emails = graph_client.fetch_emails(since=since, max_results=100)
 
         new_count = 0
+        moved_count = 0
         for email in emails:
             parsed = parse_pexa_email(
                 email_id=email["id"],
@@ -50,12 +52,18 @@ def sync_emails():
                 received_at=email["received_at"],
                 sender=email["sender_email"],
             )
-            if insert_notification(parsed):
+            was_new = insert_notification(parsed)
+            if was_new:
                 new_count += 1
+
+            # Move all processed emails (new or duplicate) to archive folder
+            # This keeps the PEXA folder clean and prevents re-processing
+            if graph_client.move_email_to_archive(email["id"]):
+                moved_count += 1
 
         last_sync_time = datetime.utcnow()
         last_sync_status = f"OK - {new_count} new notifications"
-        logger.info(f"Sync complete: {new_count} new notifications from {len(emails)} emails")
+        logger.info(f"Sync complete: {new_count} new notifications from {len(emails)} emails, {moved_count} moved to Processed")
         return new_count
 
     except Exception as e:
