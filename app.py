@@ -454,7 +454,7 @@ def check_overdue_tasks():
                 done_link = f"{base_url}/done/{nid}?token={token}"
 
                 # Build reminder email (HTML)
-                subject = f"REMINDER: {matter} - {_settlement_date_only(settlement_date)} - PEXA Action Required"
+                subject = f"REMINDER: {matter} - Settlement Date {_settlement_date_only(settlement_date)} - PEXA Action Required"
                 # Escape HTML in dynamic content
                 safe_matter = str(matter).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 safe_ntype = str(ntype).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
