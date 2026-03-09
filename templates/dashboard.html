@@ -114,13 +114,16 @@
                     <th data-sort="received_at" onclick="sortBy('received_at')">
                         Received <span class="sort-icon">&#8693;</span>
                     </th>
+                    <th data-sort="emailed_to" onclick="sortBy('emailed_to')">
+                        Emailed To <span class="sort-icon">&#8693;</span>
+                    </th>
                     <th data-sort="status" onclick="sortBy('status')">
                         Status <span class="sort-icon">&#8693;</span>
                     </th>
                 </tr>
             </thead>
             <tbody id="notifications-body">
-                <tr><td colspan="9" class="loading">
+                <tr><td colspan="10" class="loading">
                     <div class="spinner"></div>
                     <p style="margin-top:12px">Loading notifications...</p>
                 </td></tr>

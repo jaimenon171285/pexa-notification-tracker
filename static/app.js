@@ -346,7 +346,7 @@ function renderTable() {
 
     if (notifications.length === 0) {
         tbody.innerHTML = `
-            <tr><td colspan="9" class="empty-state">
+            <tr><td colspan="10" class="empty-state">
                 <div class="empty-icon">📭</div>
                 <h3>No notifications found</h3>
                 <p>Try adjusting your filters or sync to check for new emails</p>
@@ -372,10 +372,11 @@ function renderTable() {
                 <td data-label="Summary" title="${escapeHtml(n.summary)}">${truncate(n.summary, 60)}</td>
                 <td data-label="Settlement">${formatDate(n.settlement_date)}</td>
                 <td data-label="Received">${formatDateTime(n.received_at)}</td>
+                <td data-label="Emailed To" class="emailed-to-cell" title="${escapeHtml(n.emailed_to || '')}">${renderEmailedTo(n.emailed_to)}</td>
                 <td data-label="Status">${renderStatus(n.status)}</td>
             </tr>
             <tr class="detail-panel ${isExpanded ? "open" : ""}" id="detail-${n.id}">
-                <td colspan="9">
+                <td colspan="10">
                     ${isExpanded ? renderDetail(n) : ""}
                 </td>
             </tr>`;
@@ -394,6 +395,17 @@ function renderPriority(category) {
         <span class="priority-dot"></span>
         ${labels[category] || category}
     </span>`;
+}
+
+function renderEmailedTo(emailedTo) {
+    if (!emailedTo) return `<span style="color:#aaa">—</span>`;
+    // Show short names where possible, full emails otherwise
+    const emails = emailedTo.split(",").map(e => e.trim()).filter(Boolean);
+    const display = emails.map(email => {
+        const staff = STAFF_LIST.find(s => s.email === email);
+        return staff ? staff.name : email;
+    });
+    return `<span class="emailed-to-names">${escapeHtml(display.join(", "))}</span>`;
 }
 
 function renderStatus(status) {

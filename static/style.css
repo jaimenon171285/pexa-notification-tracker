@@ -381,6 +381,19 @@ tbody td {
     text-overflow: ellipsis;
 }
 
+/* Emailed To column */
+.emailed-to-cell {
+    font-size: 12px;
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.emailed-to-names {
+    color: #5b21b6;
+    font-weight: 500;
+}
+
 /* Detail Panel (expandable row) */
 .detail-panel {
     display: none;
