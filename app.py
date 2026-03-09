@@ -176,6 +176,16 @@ def api_connection():
     return jsonify(status)
 
 
+def _settlement_date_only(settlement_date_str):
+    """Extract just the date portion from a settlement date string.
+    E.g. '14/04/2026 02:30 PM AEST' -> '14/04/2026'"""
+    import re as _re
+    if not settlement_date_str:
+        return "N/A"
+    match = _re.match(r"(\d{1,2}/\d{1,2}/\d{4})", settlement_date_str)
+    return match.group(1) if match else settlement_date_str
+
+
 def _is_settlement_urgent(settlement_date_str):
     """Check if the settlement date is within 3 days from now.
     Parses Australian format: '14/04/2026 02:30 PM AEST' or just '14/04/2026'."""
@@ -444,7 +454,7 @@ def check_overdue_tasks():
                 done_link = f"{base_url}/done/{nid}?token={token}"
 
                 # Build reminder email (HTML)
-                subject = f"REMINDER: {matter} - {settlement_date} - PEXA Action Required"
+                subject = f"REMINDER: {matter} - {_settlement_date_only(settlement_date)} - PEXA Action Required"
                 # Escape HTML in dynamic content
                 safe_matter = str(matter).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 safe_ntype = str(ntype).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

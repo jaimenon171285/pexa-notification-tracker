@@ -162,7 +162,7 @@ function openEmailModal(id) {
                 <div class="form-group">
                     <label>Subject</label>
                     <input type="text" id="email-subject" class="form-control"
-                        value="${n.matter_number} - ${n.settlement_date || 'N/A'} - PEXA Action Required">
+                        value="${n.matter_number} - ${formatSettlementDateOnly(n.settlement_date)} - PEXA Action Required">
                 </div>
                 <div class="form-group">
                     <label>Message</label>
@@ -733,6 +733,13 @@ function truncate(str, len) {
 function formatDate(dateStr) {
     if (!dateStr) return "N/A";
     return escapeHtml(dateStr);
+}
+
+function formatSettlementDateOnly(dateStr) {
+    // Extract just the date portion (e.g. "14/04/2026") from "14/04/2026 02:30 PM AEST"
+    if (!dateStr) return "N/A";
+    const match = dateStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+    return match ? match[1] : dateStr;
 }
 
 function formatDateTime(isoStr) {
