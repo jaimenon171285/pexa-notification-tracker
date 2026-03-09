@@ -162,7 +162,7 @@ function openEmailModal(id) {
                 <div class="form-group">
                     <label>Subject</label>
                     <input type="text" id="email-subject" class="form-control"
-                        value="PEXA Action Required - Matter ${n.matter_number} - ${n.notification_type}">
+                        value="${n.matter_number} - ${n.settlement_date || 'N/A'} - PEXA Action Required">
                 </div>
                 <div class="form-group">
                     <label>Message</label>

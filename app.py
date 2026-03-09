@@ -176,11 +176,35 @@ def api_connection():
     return jsonify(status)
 
 
-def _build_html_email(message, done_link=""):
+def _is_settlement_urgent(settlement_date_str):
+    """Check if the settlement date is within 3 days from now.
+    Parses Australian format: '14/04/2026 02:30 PM AEST' or just '14/04/2026'."""
+    import re as _re
+    if not settlement_date_str:
+        return False
+    match = _re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", settlement_date_str)
+    if not match:
+        return False
+    try:
+        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        settlement = datetime(year, month, day, tzinfo=SYDNEY_TZ)
+        now = _now_sydney()
+        diff = (settlement - now).total_seconds() / 86400  # days
+        return 0 <= diff <= 3
+    except Exception:
+        return False
+
+
+def _build_html_email(message, done_link="", settlement_date=""):
     """Convert a plain-text task message into an HTML email.
     The PEXA message content (between --- Full PEXA Message --- and --- End of Message ---)
-    is highlighted in bold red so the recipient can clearly see what needs to be done."""
+    is highlighted in bold red so the recipient can clearly see what needs to be done.
+    If settlement_date is within 3 days, the entire email body is rendered in red."""
     import re as _re
+
+    urgent = _is_settlement_urgent(settlement_date)
+    # Base text colour: red if urgent, otherwise default dark
+    body_color = "#cc0000" if urgent else "#333"
 
     # Split out the PEXA message section and make it bold + red
     pexa_pattern = r"(--- Full PEXA Message ---\s*\n)(.*?)(\n\s*--- End of Message ---)"
@@ -209,6 +233,15 @@ def _build_html_email(message, done_link=""):
         # No PEXA section found — just convert the whole message
         body_html = message.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
 
+    # Add urgent settlement warning banner at top if within 3 days
+    urgent_banner = ""
+    if urgent:
+        safe_date = (settlement_date or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        urgent_banner = f"""<div style="background: #cc0000; color: white; padding: 14px 20px; border-radius: 8px; margin-bottom: 16px; text-align: center; font-size: 16px; font-weight: bold;">
+⚠️ URGENT — SETTLEMENT DATE IS WITHIN 3 DAYS: {safe_date} ⚠️
+</div>
+"""
+
     # Add the "Mark as Done" button if we have a link
     if done_link:
         body_html += f"""<br>
@@ -223,8 +256,8 @@ def _build_html_email(message, done_link=""):
 
     # Wrap in a basic HTML template
     return f"""<html>
-<body style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">
-{body_html}
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: {body_color}; line-height: 1.5;{' font-weight: bold;' if urgent else ''}">
+{urgent_banner}{body_html}
 </body>
 </html>"""
 
@@ -252,13 +285,19 @@ def api_send_task():
     try:
         # Generate "Mark as Done" link if we have a notification ID
         done_link = ""
+        settlement_date = ""
         if notification_id:
             token = generate_action_token(notification_id)
             base_url = request.host_url.rstrip("/")
             done_link = f"{base_url}/done/{notification_id}?token={token}"
+            # Look up settlement date for urgent styling
+            notif = get_notification(notification_id)
+            if notif:
+                settlement_date = notif.get("settlement_date", "") or ""
 
         # Build HTML email with PEXA message highlighted in bold red
-        html_body = _build_html_email(message, done_link)
+        # If settlement is within 3 days, entire body will be red + bold
+        html_body = _build_html_email(message, done_link, settlement_date=settlement_date)
 
         # Send via Graph API using the PEXA mailbox (HTML format)
         send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
@@ -398,13 +437,14 @@ def check_overdue_tasks():
                 matter = task.get("matter_number", "Unknown")
                 ntype = task.get("notification_type", "PEXA Notification")
                 summary = task.get("summary", "")[:200]
+                settlement_date = task.get("settlement_date", "") or "N/A"
 
                 # Generate Mark as Done link
                 token = generate_action_token(nid)
                 done_link = f"{base_url}/done/{nid}?token={token}"
 
                 # Build reminder email (HTML)
-                subject = f"REMINDER: Outstanding PEXA Task - Matter #{matter}"
+                subject = f"REMINDER: {matter} - {settlement_date} - PEXA Action Required"
                 # Escape HTML in dynamic content
                 safe_matter = str(matter).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 safe_ntype = str(ntype).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
