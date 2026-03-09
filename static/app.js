@@ -162,7 +162,7 @@ function openEmailModal(id) {
                 <div class="form-group">
                     <label>Subject</label>
                     <input type="text" id="email-subject" class="form-control"
-                        value="${n.matter_number} - Settlement Date ${formatSettlementDateOnly(n.settlement_date)} - PEXA Action Required">
+                        value="${isSettlementTodayOrTomorrow(n.settlement_date) ? 'URGENT - ' : ''}${n.matter_number} - Settlement Date ${formatSettlementDateOnly(n.settlement_date)} - PEXA Action Required">
                 </div>
                 <div class="form-group">
                     <label>Message</label>
@@ -740,6 +740,18 @@ function formatSettlementDateOnly(dateStr) {
     if (!dateStr) return "N/A";
     const match = dateStr.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
     return match ? match[1] : dateStr;
+}
+
+function isSettlementTodayOrTomorrow(dateStr) {
+    // Check if settlement date is today or tomorrow (Australian dd/mm/yyyy format)
+    if (!dateStr) return false;
+    const match = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (!match) return false;
+    const settlement = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const diffDays = (settlement - today) / (1000 * 60 * 60 * 24);
+    return diffDays >= 0 && diffDays <= 1;
 }
 
 function formatDateTime(isoStr) {

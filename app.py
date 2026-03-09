@@ -186,6 +186,25 @@ def _settlement_date_only(settlement_date_str):
     return match.group(1) if match else settlement_date_str
 
 
+def _is_settlement_today_or_tomorrow(settlement_date_str):
+    """Check if the settlement date is today or tomorrow."""
+    import re as _re
+    if not settlement_date_str:
+        return False
+    match = _re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", settlement_date_str)
+    if not match:
+        return False
+    try:
+        day, month, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+        settlement = datetime(year, month, day, tzinfo=SYDNEY_TZ)
+        now = _now_sydney()
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        diff_days = (settlement - today).total_seconds() / 86400
+        return 0 <= diff_days <= 1
+    except Exception:
+        return False
+
+
 def _is_settlement_urgent(settlement_date_str):
     """Check if the settlement date is within 3 days from now.
     Parses Australian format: '14/04/2026 02:30 PM AEST' or just '14/04/2026'."""
@@ -454,7 +473,8 @@ def check_overdue_tasks():
                 done_link = f"{base_url}/done/{nid}?token={token}"
 
                 # Build reminder email (HTML)
-                subject = f"REMINDER: {matter} - Settlement Date {_settlement_date_only(settlement_date)} - PEXA Action Required"
+                urgent_prefix = "URGENT - " if _is_settlement_today_or_tomorrow(settlement_date) else ""
+                subject = f"REMINDER: {urgent_prefix}{matter} - Settlement Date {_settlement_date_only(settlement_date)} - PEXA Action Required"
                 # Escape HTML in dynamic content
                 safe_matter = str(matter).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
                 safe_ntype = str(ntype).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
