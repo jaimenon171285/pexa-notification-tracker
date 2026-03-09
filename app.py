@@ -279,7 +279,7 @@ def _build_html_email(message, done_link="", settlement_date=""):
     <p style="font-size: 18px; font-weight: bold; color: #1a7a3a;">✅ PLEASE MARK THIS TASK AS COMPLETE</p>
     <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Click Here When Done</a>
     <p style="color: #333; font-size: 14px; font-weight: bold; margin-top: 14px;">You must click the button above once you have completed this task.</p>
-    <p style="color: #cc0000; font-size: 13px; font-weight: bold; margin-top: 8px;">⚠️ If this task is not marked as complete within 48 hours, a reminder email will be sent automatically.</p>
+    <p style="color: #cc0000; font-size: 13px; font-weight: bold; margin-top: 8px;">⚠️ If this task is not marked as complete within 24 hours, a reminder email will be sent automatically.</p>
 </div>
 <hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">"""
 
@@ -338,7 +338,7 @@ def api_send_task():
         if notification_id:
             add_note(notification_id, f"Task emailed to {to_display} by {from_user} (with Mark as Done link)", from_user)
             update_notification_status(notification_id, "reviewed", from_user)
-            # Track the first recipient for 48-hour reminder follow-up
+            # Track the first recipient for 24-hour reminder follow-up
             update_emailed_info(notification_id, to_display, datetime.utcnow().isoformat())
 
         logger.info(f"Task email sent to {to_display} for notification {notification_id} by {from_user} - status set to reviewed")
@@ -441,14 +441,14 @@ def mark_done_from_email(notification_id):
     """, 200)
 
 
-# --- 48-Hour Reminder Check ---
+# --- 24-Hour Reminder Check ---
 
 def check_overdue_tasks():
-    """Check for tasks emailed more than 48 hours ago that haven't been actioned.
+    """Check for tasks emailed more than 24 hours ago that haven't been actioned.
     Sends a reminder email to the original recipient with the Mark as Done link
     and asks them to contact Sheriff/Jai if they need help."""
     try:
-        overdue = get_overdue_emailed_tasks(hours=48)
+        overdue = get_overdue_emailed_tasks(hours=24)
         if not overdue:
             logger.info("Overdue check: no overdue tasks found")
             return
@@ -483,7 +483,7 @@ def check_overdue_tasks():
                 reminder_html = f"""<html>
 <body style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">
 <p>Hi,</p>
-<p>This is a reminder that the following PEXA task was sent to you over 48 hours ago and has not yet been marked as complete:</p>
+<p>This is a reminder that the following PEXA task was sent to you over 24 hours ago and has not yet been marked as complete:</p>
 
 <div style="color: #cc0000; font-weight: bold; font-size: 15px; padding: 12px 16px; background: #fff5f5; border-left: 4px solid #cc0000; margin: 12px 0;">
     Matter #: {safe_matter}<br>
@@ -517,7 +517,7 @@ def check_overdue_tasks():
                 # Mark reminder as sent so we don't send again
                 mark_reminder_sent(nid)
                 to_display = ", ".join(to_email) if isinstance(to_email, list) else to_email
-                add_note(nid, f"48-hour reminder sent to {to_display}", "System")
+                add_note(nid, f"24-hour reminder sent to {to_display}", "System")
 
                 reminder_count += 1
                 logger.info(f"Reminder sent to {to_display} for notification {nid} (Matter #{matter})")
