@@ -128,16 +128,14 @@ body {
     letter-spacing: 0.5px;
 }
 
-.stat-action { border-left-color: #ef4444; }
-.stat-action .stat-number { color: #ef4444; }
-.stat-review { border-left-color: #f59e0b; }
-.stat-review .stat-number { color: #f59e0b; }
-.stat-info { border-left-color: #6b7280; }
-.stat-info .stat-number { color: #6b7280; }
-.stat-done { border-left-color: #10b981; }
-.stat-done .stat-number { color: #10b981; }
 .stat-new { border-left-color: #3b82f6; }
 .stat-new .stat-number { color: #3b82f6; }
+.stat-review { border-left-color: #f59e0b; }
+.stat-review .stat-number { color: #f59e0b; }
+.stat-done { border-left-color: #10b981; }
+.stat-done .stat-number { color: #10b981; }
+.stat-dismissed { border-left-color: #6b7280; }
+.stat-dismissed .stat-number { color: #6b7280; }
 
 /* Connection Banner */
 .connection-banner {
@@ -648,10 +646,7 @@ tbody td {
     .stat-card .stat-number { font-size: 22px; }
     .stat-card .stat-label { font-size: 10px; margin-top: 4px; }
 
-    /* Last stat card spans full width */
-    .stat-card:last-child {
-        grid-column: 1 / -1;
-    }
+    /* 4 cards = clean 2x2 grid, no spanning needed */
 
     /* --- Mobile Quick Filters --- */
     .mobile-quick-filters {

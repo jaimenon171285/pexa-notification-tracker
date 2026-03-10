@@ -33,21 +33,17 @@
             <div id="stat-new" class="stat-number">-</div>
             <div class="stat-label">New</div>
         </div>
-        <div class="stat-card stat-action" id="card-action" onclick="filterByCategory('action_required')">
-            <div id="stat-action" class="stat-number">-</div>
-            <div class="stat-label">Action Required</div>
-        </div>
-        <div class="stat-card stat-review" id="card-review" onclick="filterByCategory('review')">
+        <div class="stat-card stat-review" id="card-review" onclick="filterByStatus('reviewed')">
             <div id="stat-review" class="stat-number">-</div>
             <div class="stat-label">To Review</div>
-        </div>
-        <div class="stat-card stat-info" id="card-info" onclick="filterByCategory('info')">
-            <div id="stat-info" class="stat-number">-</div>
-            <div class="stat-label">Info Only</div>
         </div>
         <div class="stat-card stat-done" id="card-done" onclick="filterByStatus('actioned')">
             <div id="stat-done" class="stat-number">-</div>
             <div class="stat-label">Completed</div>
+        </div>
+        <div class="stat-card stat-dismissed" id="card-dismissed" onclick="filterByStatus('dismissed')">
+            <div id="stat-dismissed" class="stat-number">-</div>
+            <div class="stat-label">Dismissed</div>
         </div>
     </div>
 
@@ -91,8 +87,7 @@
     <!-- Bulk Actions -->
     <div id="bulk-actions" class="bulk-actions">
         <span id="selected-count" class="selected-count">0 selected</span>
-        <button class="btn-bulk" onclick="bulkAction('reviewed')">Mark Reviewed</button>
-        <button class="btn-bulk" onclick="bulkAction('actioned')">Mark Actioned</button>
+        <button class="btn-bulk" onclick="bulkAction('actioned')">Mark Complete</button>
         <button class="btn-bulk" onclick="bulkAction('dismissed')">Dismiss All</button>
     </div>
 
@@ -106,9 +101,6 @@
                     </th>
                     <th data-sort="matter_number" onclick="sortBy('matter_number')">
                         Matter # <span class="sort-icon">&#8693;</span>
-                    </th>
-                    <th data-sort="category" onclick="sortBy('category')">
-                        Priority <span class="sort-icon">&#8693;</span>
                     </th>
                     <th data-sort="notification_type" onclick="sortBy('notification_type')">
                         Type <span class="sort-icon">&#8693;</span>
@@ -132,7 +124,7 @@
                 </tr>
             </thead>
             <tbody id="notifications-body">
-                <tr><td colspan="10" class="loading">
+                <tr><td colspan="9" class="loading">
                     <div class="spinner"></div>
                     <p style="margin-top:12px">Loading notifications...</p>
                 </td></tr>

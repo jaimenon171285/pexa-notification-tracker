@@ -331,25 +331,13 @@ def get_stats():
     cur = conn.cursor()
     stats = {}
 
-    for category in ("action_required", "review", "info"):
+    for status in ("new", "reviewed", "actioned", "dismissed"):
         cur.execute(
-            "SELECT COUNT(*) as count FROM notifications WHERE category = ? AND status NOT IN ('actioned', 'dismissed')",
-            (category,)
+            "SELECT COUNT(*) as count FROM notifications WHERE status = ?",
+            (status,)
         )
         row = _fetchone(cur)
-        stats[category] = row["count"]
-
-    cur.execute(
-        "SELECT COUNT(*) as count FROM notifications WHERE status IN ('actioned', 'dismissed')"
-    )
-    row = _fetchone(cur)
-    stats["completed"] = row["count"]
-
-    cur.execute(
-        "SELECT COUNT(*) as count FROM notifications WHERE status = 'new'"
-    )
-    row = _fetchone(cur)
-    stats["new"] = row["count"]
+        stats[status] = row["count"]
 
     cur.close()
     conn.close()

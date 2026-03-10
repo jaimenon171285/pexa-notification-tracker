@@ -285,11 +285,10 @@ async function checkConnection() {
 // --- Rendering ---
 
 function renderStats(stats) {
-    document.getElementById("stat-action").textContent = stats.action_required || 0;
-    document.getElementById("stat-review").textContent = stats.review || 0;
-    document.getElementById("stat-info").textContent = stats.info || 0;
-    document.getElementById("stat-done").textContent = stats.completed || 0;
     document.getElementById("stat-new").textContent = stats.new || 0;
+    document.getElementById("stat-review").textContent = stats.reviewed || 0;
+    document.getElementById("stat-done").textContent = stats.actioned || 0;
+    document.getElementById("stat-dismissed").textContent = stats.dismissed || 0;
 
     const syncEl = document.getElementById("sync-info");
     if (stats.last_sync_time) {
@@ -347,7 +346,7 @@ function renderTable() {
 
     if (notifications.length === 0) {
         tbody.innerHTML = `
-            <tr><td colspan="10" class="empty-state">
+            <tr><td colspan="9" class="empty-state">
                 <div class="empty-icon">📭</div>
                 <h3>No notifications found</h3>
                 <p>Try adjusting your filters or sync to check for new emails</p>
@@ -367,7 +366,6 @@ function renderTable() {
                         onchange="toggleSelect(${n.id}, this.checked)">
                 </td>
                 <td data-label="Matter #"><span class="matter-num">${escapeHtml(n.matter_number)}</span></td>
-                <td data-label="Priority">${renderPriority(n.category)}</td>
                 <td data-label="Type">${escapeHtml(n.notification_type)}</td>
                 <td data-label="From" class="from-cell" title="${escapeHtml(n.message_from || '')}">${truncate(n.message_from || '', 25)}</td>
                 <td data-label="Summary" title="${escapeHtml(n.summary)}">${truncate(n.summary, 60)}</td>
@@ -377,25 +375,13 @@ function renderTable() {
                 <td data-label="Status">${renderStatus(n.status)}</td>
             </tr>
             <tr class="detail-panel ${isExpanded ? "open" : ""}" id="detail-${n.id}">
-                <td colspan="10">
+                <td colspan="9">
                     ${isExpanded ? renderDetail(n) : ""}
                 </td>
             </tr>`;
     }).join("");
 
     updateBulkActions();
-}
-
-function renderPriority(category) {
-    const labels = {
-        action_required: "Action",
-        review: "Review",
-        info: "Info",
-    };
-    return `<span class="priority-badge priority-${category === 'action_required' ? 'action' : category}">
-        <span class="priority-dot"></span>
-        ${labels[category] || category}
-    </span>`;
 }
 
 function renderEmailedTo(emailedTo) {
@@ -457,10 +443,9 @@ function renderDetail(n) {
 
                 <div class="detail-actions">
                     <button class="btn btn-email" onclick="event.stopPropagation(); openEmailModal(${n.id})">Email Task</button>
-                    ${n.status !== "actioned" ? `<button class="btn btn-action" onclick="event.stopPropagation(); updateStatus(${n.id}, 'actioned')">Mark Actioned</button>` : ""}
-                    ${n.status !== "reviewed" ? `<button class="btn btn-review" onclick="event.stopPropagation(); updateStatus(${n.id}, 'reviewed')">Mark Reviewed</button>` : ""}
+                    ${n.status !== "actioned" ? `<button class="btn btn-action" onclick="event.stopPropagation(); updateStatus(${n.id}, 'actioned')">Mark Complete</button>` : ""}
                     ${n.status !== "dismissed" ? `<button class="btn btn-dismiss" onclick="event.stopPropagation(); updateStatus(${n.id}, 'dismissed')">Dismiss</button>` : ""}
-                    ${n.status !== "new" ? `<button class="btn btn-reopen" onclick="event.stopPropagation(); updateStatus(${n.id}, 'new')">Reopen</button>` : ""}
+                    ${n.status === "actioned" || n.status === "dismissed" ? `<button class="btn btn-reopen" onclick="event.stopPropagation(); updateStatus(${n.id}, 'new')">Reopen</button>` : ""}
                 </div>
             </div>
             <div class="detail-section">
@@ -515,27 +500,6 @@ function updateBulkActions() {
     }
 }
 
-function filterByCategory(category) {
-    // Toggle filter
-    if (state.filters.category === category) {
-        delete state.filters.category;
-    } else {
-        state.filters.category = category;
-    }
-    // Update active state on cards
-    document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
-    if (state.filters.category) {
-        const cardMap = {
-            action_required: "card-action",
-            review: "card-review",
-            info: "card-info",
-        };
-        const card = document.getElementById(cardMap[category]);
-        if (card) card.classList.add("active");
-    }
-    fetchNotifications();
-}
-
 function filterByStatus(status) {
     if (state.filters.status === status) {
         delete state.filters.status;
@@ -546,10 +510,15 @@ function filterByStatus(status) {
         delete state.filters.hide_closed;
     }
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
-    if (state.filters.status === "new") {
-        document.getElementById("card-new").classList.add("active");
-    } else if (state.filters.status === "actioned") {
-        document.getElementById("card-done").classList.add("active");
+    if (state.filters.status) {
+        const cardMap = {
+            new: "card-new",
+            reviewed: "card-review",
+            actioned: "card-done",
+            dismissed: "card-dismissed",
+        };
+        const card = document.getElementById(cardMap[state.filters.status]);
+        if (card) card.classList.add("active");
     }
     document.getElementById("filter-status").value = state.filters.status || "";
     fetchNotifications();
@@ -675,13 +644,6 @@ function sortNotifications(notifications) {
     return [...notifications].sort((a, b) => {
         let aVal = a[state.sortField] || "";
         let bVal = b[state.sortField] || "";
-
-        // Category priority sorting
-        if (state.sortField === "category") {
-            const order = { action_required: 0, review: 1, info: 2 };
-            aVal = order[aVal] ?? 3;
-            bVal = order[bVal] ?? 3;
-        }
 
         // Settlement date: parse as real dates for proper sorting
         if (state.sortField === "settlement_date") {
