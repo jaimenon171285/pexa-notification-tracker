@@ -342,7 +342,8 @@ function updateCountdown() {
 
 function renderTable() {
     const tbody = document.getElementById("notifications-body");
-    const notifications = sortNotifications(state.notifications);
+    const filtered = applyQuickFilter(state.notifications);
+    const notifications = sortNotifications(filtered);
 
     if (notifications.length === 0) {
         tbody.innerHTML = `
@@ -585,6 +586,54 @@ function setUser() {
     const select = document.getElementById("user-select");
     state.currentUser = select.value;
     localStorage.setItem("pexaUser", state.currentUser);
+}
+
+// --- Mobile Quick Filters ---
+
+state.quickFilter = null; // 'today', 'tomorrow', 'week', or null
+
+function quickFilter(mode) {
+    // Clear active states
+    document.querySelectorAll(".quick-filter-btn").forEach(b => b.classList.remove("active"));
+
+    if (mode === "clear" || state.quickFilter === mode) {
+        // Toggle off or clear
+        state.quickFilter = null;
+        state.sortField = "received_at";
+        state.sortDir = "desc";
+    } else if (mode === "sort") {
+        // Just sort by settlement date ascending (soonest first)
+        state.quickFilter = null;
+        state.sortField = "settlement_date";
+        state.sortDir = "asc";
+        document.getElementById("qf-sort-settlement").classList.add("active");
+    } else {
+        state.quickFilter = mode;
+        state.sortField = "settlement_date";
+        state.sortDir = "asc";
+        document.getElementById("qf-" + mode).classList.add("active");
+    }
+    renderTable();
+}
+
+function applyQuickFilter(notifications) {
+    if (!state.quickFilter) return notifications;
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    return notifications.filter(n => {
+        if (!n.settlement_date) return false;
+        const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (!match) return false;
+        const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+        const diffDays = (sd - today) / (1000 * 60 * 60 * 24);
+
+        if (state.quickFilter === "today") return diffDays >= 0 && diffDays < 1;
+        if (state.quickFilter === "tomorrow") return diffDays >= 0 && diffDays < 2;
+        if (state.quickFilter === "week") return diffDays >= 0 && diffDays <= 7;
+        return true;
+    });
 }
 
 function toggleFilters() {

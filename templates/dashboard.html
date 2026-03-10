@@ -51,6 +51,15 @@
         </div>
     </div>
 
+    <!-- Mobile Quick Filters -->
+    <div id="mobile-quick-filters" class="mobile-quick-filters">
+        <button class="quick-filter-btn" id="qf-today" onclick="quickFilter('today')">🔴 Today</button>
+        <button class="quick-filter-btn" id="qf-tomorrow" onclick="quickFilter('tomorrow')">🟠 Tomorrow</button>
+        <button class="quick-filter-btn" id="qf-week" onclick="quickFilter('week')">📅 This Week</button>
+        <button class="quick-filter-btn" id="qf-sort-settlement" onclick="quickFilter('sort')">⬆ Sort by Settlement</button>
+        <button class="quick-filter-btn qf-clear" id="qf-clear" onclick="quickFilter('clear')">✕ Clear</button>
+    </div>
+
     <!-- Filter Toggle (mobile only) -->
     <button id="filter-toggle" class="filter-toggle" onclick="toggleFilters()">
         Filters <span id="filter-toggle-icon">&#9660;</span>
