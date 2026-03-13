@@ -84,6 +84,9 @@ def init_db():
 
     conn.commit()
 
+    # Backfill NULL reminder_sent values to 0
+    cur.execute("UPDATE notifications SET reminder_sent = 0 WHERE reminder_sent IS NULL")
+
     # Backfill message_from for existing records
     _backfill_message_from(conn)
 
@@ -293,9 +296,9 @@ def update_emailed_info(notification_id, emailed_to, emailed_at):
     conn.close()
 
 
-def get_overdue_emailed_tasks(hours=48):
+def get_overdue_emailed_tasks(hours=24):
     """Get notifications that were emailed but not actioned within the given hours.
-    Only returns tasks where reminder_sent = 0 (haven't been reminded yet)."""
+    Only returns tasks where reminder_sent is 0 or NULL (haven't been reminded yet)."""
     conn = get_db()
     cur = conn.cursor()
     cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
@@ -305,7 +308,7 @@ def get_overdue_emailed_tasks(hours=48):
           AND emailed_at != '' AND emailed_at IS NOT NULL
           AND emailed_at < ?
           AND status NOT IN ('actioned', 'dismissed')
-          AND reminder_sent = 0
+          AND (reminder_sent = 0 OR reminder_sent IS NULL)
     """, (cutoff,))
     rows = _fetchall(cur)
     cur.close()

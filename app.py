@@ -448,10 +448,12 @@ def check_overdue_tasks():
     Sends a reminder email to the original recipient with the Mark as Done link
     and asks them to contact Sheriff/Jai if they need help."""
     try:
+        logger.info("Running 24-hour overdue check...")
         overdue = get_overdue_emailed_tasks(hours=24)
         if not overdue:
-            logger.info("Overdue check: no overdue tasks found")
+            logger.info("Overdue check: no tasks need reminders right now")
             return
+        logger.info(f"Found {len(overdue)} overdue task(s) needing reminders")
 
         # Base URL for Mark as Done links (no request context in scheduled jobs)
         base_url = os.getenv("APP_URL", "https://pexa-notification-tracker.onrender.com")
@@ -529,6 +531,13 @@ def check_overdue_tasks():
 
     except Exception as e:
         logger.error(f"Overdue task check failed: {e}")
+
+
+@app.route("/api/check-reminders", methods=["POST"])
+def api_check_reminders():
+    """Manually trigger the 24-hour overdue reminder check."""
+    check_overdue_tasks()
+    return jsonify({"success": True, "message": "Reminder check completed - see server logs for details"})
 
 
 # --- Startup ---
