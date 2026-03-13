@@ -218,6 +218,18 @@ body {
 
 .btn-clear-filters:hover { background: #f9fafb; }
 
+.btn-send-reminders {
+    padding: 7px 14px;
+    border: 1px solid #cc0000;
+    border-radius: 6px;
+    background: #cc0000;
+    font-size: 13px;
+    cursor: pointer;
+    color: white;
+    font-weight: 600;
+}
+.btn-send-reminders:hover { background: #a30000; }
+
 /* Bulk Actions */
 .bulk-actions {
     display: none;
@@ -773,7 +785,8 @@ tbody td {
         font-size: 14px;
     }
 
-    .btn-clear-filters {
+    .btn-clear-filters,
+    .btn-send-reminders {
         width: 100%;
         padding: 10px;
         font-size: 14px;

@@ -341,7 +341,8 @@ function updateCountdown() {
 
 function renderTable() {
     const tbody = document.getElementById("notifications-body");
-    const filtered = applyQuickFilter(state.notifications);
+    const afterSettlement = applySettlementFilter(state.notifications);
+    const filtered = applyQuickFilter(afterSettlement);
     const notifications = sortNotifications(filtered);
 
     if (notifications.length === 0) {
@@ -544,9 +545,11 @@ function applyFilters() {
 
 function clearFilters() {
     state.filters = { hide_closed: "true" };
+    state.settlementFilter = null;
     document.getElementById("filter-matter").value = "";
     document.getElementById("filter-search").value = "";
     document.getElementById("filter-status").value = "";
+    document.getElementById("filter-settlement").value = "";
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
     fetchNotifications();
 }
@@ -603,6 +606,104 @@ function applyQuickFilter(notifications) {
         if (state.quickFilter === "week") return diffDays >= 0 && diffDays <= 7;
         return true;
     });
+}
+
+// --- Settlement Date Filter (desktop) ---
+
+state.settlementFilter = null; // 'today', 'tomorrow', 'this_week', 'overdue', or null
+
+function applySettlementFilter(notifications) {
+    if (!state.settlementFilter) return notifications;
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    return notifications.filter(n => {
+        if (!n.settlement_date) return false;
+        const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (!match) return false;
+        const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+        const diffDays = (sd - today) / (1000 * 60 * 60 * 24);
+
+        if (state.settlementFilter === "today") return diffDays >= 0 && diffDays < 1;
+        if (state.settlementFilter === "tomorrow") return diffDays >= 0 && diffDays < 2;
+        if (state.settlementFilter === "this_week") return diffDays >= 0 && diffDays <= 7;
+        if (state.settlementFilter === "overdue") return diffDays < 0;
+        return true;
+    });
+}
+
+function onSettlementFilterChange() {
+    const val = document.getElementById("filter-settlement").value;
+    state.settlementFilter = val || null;
+    renderTable();
+}
+
+// --- Send Reminders ---
+
+function confirmSendReminders() {
+    // Count how many "reviewed" tasks exist in the current view
+    const reviewedTasks = state.notifications.filter(n => n.status === "reviewed" && n.emailed_to);
+    if (reviewedTasks.length === 0) {
+        showToast("No tasks in Review status to send reminders for", "error");
+        return;
+    }
+
+    const modal = document.getElementById("reminder-modal");
+    const taskList = reviewedTasks.slice(0, 10).map(n =>
+        `<li><strong>${escapeHtml(n.matter_number)}</strong> — emailed to ${renderEmailedTo(n.emailed_to)} — Settlement: ${escapeHtml(formatSettlementDateOnly(n.settlement_date))}</li>`
+    ).join("");
+    const moreText = reviewedTasks.length > 10 ? `<p style="color:#888;font-size:13px">...and ${reviewedTasks.length - 10} more</p>` : "";
+
+    modal.innerHTML = `
+        <div class="modal-backdrop" onclick="closeReminderModal()"></div>
+        <div class="modal-content" style="max-width:550px">
+            <div class="modal-header" style="background:#cc0000">
+                <h3 style="color:white">Send Reminders?</h3>
+                <button class="modal-close" onclick="closeReminderModal()" style="color:white">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:15px;font-weight:bold;color:#cc0000">Are you sure you want to send reminder emails to ALL ${reviewedTasks.length} task(s) currently in Review?</p>
+                <p>This will send a reminder email to each person these tasks were originally emailed to:</p>
+                <ul style="max-height:200px;overflow-y:auto;font-size:13px;line-height:1.6">${taskList}</ul>
+                ${moreText}
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-dismiss" onclick="closeReminderModal()">No, Cancel</button>
+                <button class="btn btn-send" id="btn-confirm-reminders" onclick="sendReminders()" style="background:#cc0000">Yes, Send Reminders</button>
+            </div>
+        </div>`;
+    modal.classList.add("open");
+}
+
+function closeReminderModal() {
+    const modal = document.getElementById("reminder-modal");
+    modal.classList.remove("open");
+    modal.innerHTML = "";
+}
+
+async function sendReminders() {
+    const btn = document.getElementById("btn-confirm-reminders");
+    btn.disabled = true;
+    btn.textContent = "Sending...";
+    try {
+        const resp = await fetch("/api/send-reminders", { method: "POST" });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message || `Reminders sent to ${data.count} task(s)`, "success");
+        } else {
+            showToast(`Failed: ${data.error || "Unknown error"}`, "error");
+        }
+        closeReminderModal();
+        await refreshAll();
+    } catch (e) {
+        showToast(`Error: ${e.message}`, "error");
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = "Yes, Send Reminders";
+        }
+    }
 }
 
 function toggleFilters() {
@@ -823,6 +924,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("filter-matter").addEventListener("input", debounce(applyFilters, 500));
     document.getElementById("filter-search").addEventListener("input", debounce(applyFilters, 500));
     document.getElementById("filter-status").addEventListener("change", applyFilters);
+    document.getElementById("filter-settlement").addEventListener("change", onSettlementFilterChange);
 });
 
 function debounce(fn, ms) {

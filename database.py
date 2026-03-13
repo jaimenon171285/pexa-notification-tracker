@@ -329,6 +329,51 @@ def mark_reminder_sent(notification_id):
     conn.close()
 
 
+def get_all_reviewed_emailed_tasks():
+    """Get all notifications in 'reviewed' status that have been emailed to someone."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM notifications
+        WHERE emailed_to != '' AND emailed_to IS NOT NULL
+          AND status = 'reviewed'
+    """)
+    rows = _fetchall(cur)
+    cur.close()
+    conn.close()
+    return rows
+
+
+def get_all_unremindered_emailed_tasks():
+    """Get all reviewed+emailed notifications where reminder_sent = 0 (regardless of timing)."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM notifications
+        WHERE emailed_to != '' AND emailed_to IS NOT NULL
+          AND emailed_at != '' AND emailed_at IS NOT NULL
+          AND status NOT IN ('actioned', 'dismissed')
+          AND (reminder_sent = 0 OR reminder_sent IS NULL)
+    """)
+    rows = _fetchall(cur)
+    cur.close()
+    conn.close()
+    return rows
+
+
+def reset_reminder_sent(notification_id):
+    """Reset reminder_sent to 0 so a reminder can be sent again."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE notifications SET reminder_sent = 0, updated_at = ? WHERE id = ?",
+        (datetime.utcnow().isoformat(), notification_id)
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+
+
 def get_stats():
     conn = get_db()
     cur = conn.cursor()
