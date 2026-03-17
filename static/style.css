@@ -206,6 +206,12 @@ body {
     outline: none;
 }
 
+.filter-custom-dates {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
 .btn-clear-filters {
     padding: 7px 14px;
     border: 1px solid #d1d5db;

@@ -346,14 +346,23 @@ function updateCountdown() {
 function renderTable() {
     const tbody = document.getElementById("notifications-body");
     const afterSettlement = applySettlementFilter(state.notifications);
-    const filtered = applyQuickFilter(afterSettlement);
+    const afterCompleted = applyCompletedAtFilter(afterSettlement);
+    const filtered = applyQuickFilter(afterCompleted);
     const notifications = sortNotifications(filtered);
     // Track visible IDs for select-all
     state.visibleIds = notifications.map(n => n.id);
 
+    // Show/hide Completed At column and filter when viewing completed tickets
+    const showCompleted = state.filters.status === "actioned";
+    const thCompleted = document.getElementById("th-completed-at");
+    const completedFilterGroup = document.getElementById("filter-completed-at-group");
+    if (thCompleted) thCompleted.style.display = showCompleted ? "" : "none";
+    if (completedFilterGroup) completedFilterGroup.style.display = showCompleted ? "" : "none";
+    const colSpan = showCompleted ? "10" : "9";
+
     if (notifications.length === 0) {
         tbody.innerHTML = `
-            <tr><td colspan="9" class="empty-state">
+            <tr><td colspan="${colSpan}" class="empty-state">
                 <div class="empty-icon">📭</div>
                 <h3>No notifications found</h3>
                 <p>Try adjusting your filters or sync to check for new emails</p>
@@ -379,10 +388,11 @@ function renderTable() {
                 <td data-label="Settlement">${formatDate(n.settlement_date)}</td>
                 <td data-label="Received">${formatDateTime(n.received_at)}</td>
                 <td data-label="Emailed To" class="emailed-to-cell" title="${escapeHtml(n.emailed_to || '')}">${renderEmailedTo(n.emailed_to)}</td>
+                ${showCompleted ? `<td data-label="Completed At">${formatDateTime(n.actioned_at)}</td>` : ""}
                 <td data-label="Status">${renderStatus(n.status)}</td>
             </tr>
             <tr class="detail-panel ${isExpanded ? "open" : ""}" id="detail-${n.id}">
-                <td colspan="9">
+                <td colspan="${colSpan}">
                     ${isExpanded ? renderDetail(n) : ""}
                 </td>
             </tr>`;
@@ -517,6 +527,12 @@ function filterByStatus(status) {
         // When explicitly viewing a status, don't hide anything
         delete state.filters.hide_closed;
     }
+    // Clear completed-at filter when switching away from completed
+    if (state.filters.status !== "actioned") {
+        state.completedAtFilter = null;
+        const completedInput = document.getElementById("filter-completed-at");
+        if (completedInput) completedInput.value = "";
+    }
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
     if (state.filters.status) {
         const cardMap = {
@@ -543,6 +559,12 @@ function applyFilters() {
         delete state.filters.status;
         state.filters.hide_closed = "true";
     }
+    // Clear completed-at filter when not viewing completed
+    if (statusVal !== "actioned") {
+        state.completedAtFilter = null;
+        const completedInput = document.getElementById("filter-completed-at");
+        if (completedInput) completedInput.value = "";
+    }
     // Clean undefined values
     state.filters = Object.fromEntries(
         Object.entries(state.filters).filter(([_, v]) => v !== undefined && v !== "")
@@ -552,13 +574,18 @@ function applyFilters() {
 
 function clearFilters() {
     state.filters = { hide_closed: "true" };
+    state.settlementFilter = null;
     state.settlementFrom = null;
     state.settlementTo = null;
+    state.completedAtFilter = null;
     document.getElementById("filter-matter").value = "";
     document.getElementById("filter-search").value = "";
     document.getElementById("filter-status").value = "";
+    document.getElementById("filter-settlement").value = "";
     document.getElementById("filter-settlement-from").value = "";
     document.getElementById("filter-settlement-to").value = "";
+    document.getElementById("filter-completed-at").value = "";
+    document.getElementById("filter-custom-dates").style.display = "none";
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
     fetchNotifications();
 }
@@ -617,36 +644,95 @@ function applyQuickFilter(notifications) {
     });
 }
 
-// --- Settlement Date Range Filter (desktop) ---
+// --- Settlement Date Filter (desktop dropdown + custom range) ---
 
-state.settlementFrom = null; // Date object or null
-state.settlementTo = null;   // Date object or null
+state.settlementFilter = null; // 'today', 'tomorrow', 'this_week', 'overdue', 'custom', or null
+state.settlementFrom = null;   // Date object or null (for custom range)
+state.settlementTo = null;     // Date object or null (for custom range)
+state.completedAtFilter = null; // Date object or null (for filtering completed tickets by date)
 
-function applySettlementFilter(notifications) {
-    if (!state.settlementFrom && !state.settlementTo) return notifications;
+function onSettlementFilterChange() {
+    const val = document.getElementById("filter-settlement").value;
+    state.settlementFilter = val || null;
 
-    return notifications.filter(n => {
-        if (!n.settlement_date) return false;
-        const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-        if (!match) return false;
-        const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
-
-        if (state.settlementFrom && sd < state.settlementFrom) return false;
-        if (state.settlementTo) {
-            const toEnd = new Date(state.settlementTo);
-            toEnd.setHours(23, 59, 59, 999);
-            if (sd > toEnd) return false;
-        }
-        return true;
-    });
+    // Show/hide custom date pickers
+    const customDates = document.getElementById("filter-custom-dates");
+    if (val === "custom") {
+        customDates.style.display = "flex";
+    } else {
+        customDates.style.display = "none";
+        state.settlementFrom = null;
+        state.settlementTo = null;
+        document.getElementById("filter-settlement-from").value = "";
+        document.getElementById("filter-settlement-to").value = "";
+    }
+    renderTable();
 }
 
-function onSettlementDateChange() {
+function onCustomDateChange() {
     const fromVal = document.getElementById("filter-settlement-from").value;
     const toVal = document.getElementById("filter-settlement-to").value;
     state.settlementFrom = fromVal ? new Date(fromVal) : null;
     state.settlementTo = toVal ? new Date(toVal) : null;
     renderTable();
+}
+
+function onCompletedAtFilterChange() {
+    const val = document.getElementById("filter-completed-at").value;
+    state.completedAtFilter = val ? new Date(val) : null;
+    renderTable();
+}
+
+function applySettlementFilter(notifications) {
+    if (!state.settlementFilter) return notifications;
+
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    // Custom date range
+    if (state.settlementFilter === "custom") {
+        if (!state.settlementFrom && !state.settlementTo) return notifications;
+        return notifications.filter(n => {
+            if (!n.settlement_date) return false;
+            const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+            if (!match) return false;
+            const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+            if (state.settlementFrom && sd < state.settlementFrom) return false;
+            if (state.settlementTo) {
+                const toEnd = new Date(state.settlementTo);
+                toEnd.setHours(23, 59, 59, 999);
+                if (sd > toEnd) return false;
+            }
+            return true;
+        });
+    }
+
+    // Preset filters
+    return notifications.filter(n => {
+        if (!n.settlement_date) return false;
+        const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (!match) return false;
+        const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
+        const diffDays = (sd - today) / (1000 * 60 * 60 * 24);
+
+        if (state.settlementFilter === "today") return diffDays >= 0 && diffDays < 1;
+        if (state.settlementFilter === "tomorrow") return diffDays >= 0 && diffDays < 2;
+        if (state.settlementFilter === "this_week") return diffDays >= 0 && diffDays <= 7;
+        if (state.settlementFilter === "overdue") return diffDays < 0;
+        return true;
+    });
+}
+
+function applyCompletedAtFilter(notifications) {
+    if (!state.completedAtFilter) return notifications;
+    const filterDate = state.completedAtFilter;
+    return notifications.filter(n => {
+        if (!n.actioned_at) return false;
+        const d = new Date(n.actioned_at);
+        return d.getFullYear() === filterDate.getFullYear() &&
+               d.getMonth() === filterDate.getMonth() &&
+               d.getDate() === filterDate.getDate();
+    });
 }
 
 // --- Send Reminders ---
@@ -934,8 +1020,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("filter-matter").addEventListener("input", debounce(applyFilters, 500));
     document.getElementById("filter-search").addEventListener("input", debounce(applyFilters, 500));
     document.getElementById("filter-status").addEventListener("change", applyFilters);
-    document.getElementById("filter-settlement-from").addEventListener("change", onSettlementDateChange);
-    document.getElementById("filter-settlement-to").addEventListener("change", onSettlementDateChange);
+    document.getElementById("filter-settlement-from").addEventListener("change", onCustomDateChange);
+    document.getElementById("filter-settlement-to").addEventListener("change", onCustomDateChange);
+    document.getElementById("filter-completed-at").addEventListener("change", onCompletedAtFilterChange);
 });
 
 function debounce(fn, ms) {

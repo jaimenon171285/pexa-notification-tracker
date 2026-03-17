@@ -82,12 +82,25 @@
             </select>
         </div>
         <div class="filter-group">
-            <label>Settlement From</label>
-            <input type="date" id="filter-settlement-from" class="filter-input" style="width:140px">
+            <label>Settlement Date</label>
+            <select id="filter-settlement" class="filter-select" onchange="onSettlementFilterChange()">
+                <option value="">All</option>
+                <option value="today">Today</option>
+                <option value="tomorrow">Tomorrow</option>
+                <option value="this_week">This Week</option>
+                <option value="overdue">Overdue</option>
+                <option value="custom">Custom Date Range</option>
+            </select>
         </div>
-        <div class="filter-group">
-            <label>Settlement To</label>
-            <input type="date" id="filter-settlement-to" class="filter-input" style="width:140px">
+        <div class="filter-group filter-custom-dates" id="filter-custom-dates" style="display:none">
+            <label>From</label>
+            <input type="date" id="filter-settlement-from" class="filter-input" style="width:130px">
+            <label style="margin-left:6px">To</label>
+            <input type="date" id="filter-settlement-to" class="filter-input" style="width:130px">
+        </div>
+        <div class="filter-group" id="filter-completed-at-group" style="display:none">
+            <label>Completed On</label>
+            <input type="date" id="filter-completed-at" class="filter-input" style="width:140px">
         </div>
         <button class="btn-clear-filters" onclick="clearFilters()">Clear Filters</button>
         <button class="btn-send-reminders" onclick="confirmSendReminders()">Send Reminders</button>
@@ -127,6 +140,9 @@
                     </th>
                     <th data-sort="emailed_to" onclick="sortBy('emailed_to')">
                         Emailed To <span class="sort-icon">&#8693;</span>
+                    </th>
+                    <th data-sort="actioned_at" onclick="sortBy('actioned_at')" id="th-completed-at" style="display:none">
+                        Completed At <span class="sort-icon">&#8693;</span>
                     </th>
                     <th data-sort="status" onclick="sortBy('status')">
                         Status <span class="sort-icon">&#8693;</span>
