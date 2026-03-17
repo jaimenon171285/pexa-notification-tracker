@@ -98,9 +98,13 @@
             <label style="margin-left:6px">To</label>
             <input type="date" id="filter-settlement-to" class="filter-input" style="width:130px">
         </div>
-        <div class="filter-group" id="filter-completed-at-group" style="display:none">
-            <label>Completed On</label>
-            <input type="date" id="filter-completed-at" class="filter-input" style="width:140px">
+        <div class="filter-group filter-completed-group" id="filter-completed-at-group" style="display:none">
+            <label>Completed Date</label>
+            <input type="date" id="filter-completed-at" class="filter-input" style="width:130px">
+            <label style="margin-left:6px">From</label>
+            <input type="time" id="filter-completed-time-from" class="filter-input" style="width:110px">
+            <label style="margin-left:6px">To</label>
+            <input type="time" id="filter-completed-time-to" class="filter-input" style="width:110px">
         </div>
         <button class="btn-clear-filters" onclick="clearFilters()">Clear Filters</button>
         <button class="btn-send-reminders" onclick="confirmSendReminders()">Send Reminders</button>

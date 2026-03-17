@@ -530,8 +530,14 @@ function filterByStatus(status) {
     // Clear completed-at filter when switching away from completed
     if (state.filters.status !== "actioned") {
         state.completedAtFilter = null;
+        state.completedTimeFrom = null;
+        state.completedTimeTo = null;
         const completedInput = document.getElementById("filter-completed-at");
         if (completedInput) completedInput.value = "";
+        const timeFrom = document.getElementById("filter-completed-time-from");
+        if (timeFrom) timeFrom.value = "";
+        const timeTo = document.getElementById("filter-completed-time-to");
+        if (timeTo) timeTo.value = "";
     }
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
     if (state.filters.status) {
@@ -578,6 +584,8 @@ function clearFilters() {
     state.settlementFrom = null;
     state.settlementTo = null;
     state.completedAtFilter = null;
+    state.completedTimeFrom = null;
+    state.completedTimeTo = null;
     document.getElementById("filter-matter").value = "";
     document.getElementById("filter-search").value = "";
     document.getElementById("filter-status").value = "";
@@ -585,6 +593,8 @@ function clearFilters() {
     document.getElementById("filter-settlement-from").value = "";
     document.getElementById("filter-settlement-to").value = "";
     document.getElementById("filter-completed-at").value = "";
+    document.getElementById("filter-completed-time-from").value = "";
+    document.getElementById("filter-completed-time-to").value = "";
     document.getElementById("filter-custom-dates").style.display = "none";
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
     fetchNotifications();
@@ -650,6 +660,8 @@ state.settlementFilter = null; // 'today', 'tomorrow', 'this_week', 'overdue', '
 state.settlementFrom = null;   // Date object or null (for custom range)
 state.settlementTo = null;     // Date object or null (for custom range)
 state.completedAtFilter = null; // Date object or null (for filtering completed tickets by date)
+state.completedTimeFrom = null; // "HH:MM" string or null
+state.completedTimeTo = null;   // "HH:MM" string or null
 
 function onSettlementFilterChange() {
     const val = document.getElementById("filter-settlement").value;
@@ -680,6 +692,8 @@ function onCustomDateChange() {
 function onCompletedAtFilterChange() {
     const val = document.getElementById("filter-completed-at").value;
     state.completedAtFilter = val ? new Date(val) : null;
+    state.completedTimeFrom = document.getElementById("filter-completed-time-from").value || null;
+    state.completedTimeTo = document.getElementById("filter-completed-time-to").value || null;
     renderTable();
 }
 
@@ -724,14 +738,35 @@ function applySettlementFilter(notifications) {
 }
 
 function applyCompletedAtFilter(notifications) {
-    if (!state.completedAtFilter) return notifications;
+    if (!state.completedAtFilter && !state.completedTimeFrom && !state.completedTimeTo) return notifications;
     const filterDate = state.completedAtFilter;
     return notifications.filter(n => {
         if (!n.actioned_at) return false;
         const d = new Date(n.actioned_at);
-        return d.getFullYear() === filterDate.getFullYear() &&
-               d.getMonth() === filterDate.getMonth() &&
-               d.getDate() === filterDate.getDate();
+
+        // Filter by date if set
+        if (filterDate) {
+            if (d.getFullYear() !== filterDate.getFullYear() ||
+                d.getMonth() !== filterDate.getMonth() ||
+                d.getDate() !== filterDate.getDate()) {
+                return false;
+            }
+        }
+
+        // Filter by time range if set
+        if (state.completedTimeFrom || state.completedTimeTo) {
+            const timeMinutes = d.getHours() * 60 + d.getMinutes();
+            if (state.completedTimeFrom) {
+                const [fh, fm] = state.completedTimeFrom.split(":").map(Number);
+                if (timeMinutes < fh * 60 + fm) return false;
+            }
+            if (state.completedTimeTo) {
+                const [th, tm] = state.completedTimeTo.split(":").map(Number);
+                if (timeMinutes > th * 60 + tm) return false;
+            }
+        }
+
+        return true;
     });
 }
 
@@ -1023,6 +1058,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("filter-settlement-from").addEventListener("change", onCustomDateChange);
     document.getElementById("filter-settlement-to").addEventListener("change", onCustomDateChange);
     document.getElementById("filter-completed-at").addEventListener("change", onCompletedAtFilterChange);
+    document.getElementById("filter-completed-time-from").addEventListener("change", onCompletedAtFilterChange);
+    document.getElementById("filter-completed-time-to").addEventListener("change", onCompletedAtFilterChange);
 });
 
 function debounce(fn, ms) {

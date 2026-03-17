@@ -206,7 +206,8 @@ body {
     outline: none;
 }
 
-.filter-custom-dates {
+.filter-custom-dates,
+.filter-completed-group {
     display: flex;
     align-items: center;
     gap: 6px;
