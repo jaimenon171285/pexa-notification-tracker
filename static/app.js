@@ -249,6 +249,10 @@ async function sendTaskEmail(notificationId) {
 
 async function bulkAction(action) {
     if (state.selectedIds.size === 0) return;
+    const count = state.selectedIds.size;
+    const labels = { actioned: "Mark Complete", dismissed: "Dismiss", new: "Reopen to New" };
+    const label = labels[action] || action;
+    if (!confirm(`Are you sure you want to "${label}" ${count} notification(s)?`)) return;
     await fetch("/api/bulk-action", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -259,7 +263,7 @@ async function bulkAction(action) {
         }),
     });
     state.selectedIds.clear();
-    showToast(`${action} applied to selected items`, "success");
+    showToast(`${label} applied to ${count} items`, "success");
     await refreshAll();
 }
 

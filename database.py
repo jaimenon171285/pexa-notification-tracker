@@ -230,6 +230,12 @@ def update_notification_status(notification_id, status, user=None, notes=None):
     if status in ("actioned", "reviewed"):
         updates.append("actioned_at = ?")
         params.append(now)
+    if status == "new":
+        # Clear actioned fields when reopening
+        updates.append("actioned_by = ?")
+        params.append(None)
+        updates.append("actioned_at = ?")
+        params.append(None)
     if notes is not None:
         updates.append("notes = ?")
         params.append(notes)
