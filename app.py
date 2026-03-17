@@ -448,38 +448,86 @@ def mark_done_from_email(notification_id):
 
     # Check if already actioned
     if notification["status"] == "actioned":
-        return make_response(f"""
-        <!DOCTYPE html>
-        <html><head><title>Already Done</title>
-        <style>body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}}
-        .card{{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);text-align:center;max-width:500px}}
-        h2{{color:#3498db}}p{{color:#666}}.info{{background:#f0f8ff;padding:12px;border-radius:8px;margin:16px 0}}</style></head>
-        <body><div class="card"><h2>Already Marked as Done</h2>
-        <p>This task was already marked as actioned.</p>
-        <div class="info"><strong>Matter #{notification["matter_number"]}</strong><br>{notification["notification_type"]}</div>
-        <p>Actioned by {notification.get("actioned_by", "Unknown")} at {notification.get("actioned_at", "Unknown")}</p>
-        </div></body></html>
-        """, 200)
+        return make_response(_build_done_page(notification, already_done=True), 200)
 
     # Mark as actioned
     update_notification_status(notification_id, "actioned", user="Via Email Link")
     add_note(notification_id, "Marked as done via email link", "Email Link")
     logger.info(f"Notification {notification_id} marked as done via email link")
 
-    return make_response(f"""
-    <!DOCTYPE html>
-    <html><head><title>Task Complete</title>
-    <style>body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}}
-    .card{{background:white;padding:40px;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,0.1);text-align:center;max-width:500px}}
-    h2{{color:#27ae60}}.check{{font-size:64px;margin-bottom:16px}}p{{color:#666}}
-    .info{{background:#f0fff4;padding:12px;border-radius:8px;margin:16px 0}}</style></head>
-    <body><div class="card">
-    <div class="check">✅</div>
-    <h2>Task Marked as Done!</h2>
-    <div class="info"><strong>Matter #{notification["matter_number"]}</strong><br>{notification["notification_type"]}<br>{notification["summary"][:100]}</div>
-    <p>This notification has been marked as actioned in the PEXA Tracker.</p>
-    </div></body></html>
-    """, 200)
+    return make_response(_build_done_page(notification, already_done=False), 200)
+
+
+def _build_done_page(notification, already_done=False):
+    """Build a fun congratulations page with a random meme when tasks are marked done."""
+    import random
+
+    matter = notification["matter_number"]
+    actioned_by = notification.get("actioned_by", "Unknown")
+    actioned_at = notification.get("actioned_at", "Unknown")
+
+    # Fun rotating meme GIFs - a mix of celebration & motivation
+    memes = [
+        "https://media.giphy.com/media/3o7abB06u9bNzA8lu8/giphy.gif",       # The Office - celebrate
+        "https://media.giphy.com/media/l0MYt5jPR6QX5pnqM/giphy.gif",       # High five
+        "https://media.giphy.com/media/xT0xezQGU5xCDJuCPe/giphy.gif",      # Thumbs up kid
+        "https://media.giphy.com/media/3oEjHFOscgNwdSRRDy/giphy.gif",      # Success kid
+        "https://media.giphy.com/media/26u4cqiYI30juCOGY/giphy.gif",       # Celebrate
+        "https://media.giphy.com/media/l3q2Z6S6n38zjPswo/giphy.gif",       # You got this
+        "https://media.giphy.com/media/fdyZ3qI0GVZC0/giphy.gif",           # Minion cheer
+        "https://media.giphy.com/media/3oz8xRF0v9WMAUG1IQ/giphy.gif",      # Dwight celebrate
+        "https://media.giphy.com/media/xUPGGDNsLvqsBOhuU0/giphy.gif",      # Cat thumbs up
+        "https://media.giphy.com/media/l0HlMSVVw9zqmClLq/giphy.gif",       # Awesome
+        "https://media.giphy.com/media/5GoVLqeAOo6PK/giphy.gif",           # Proud
+        "https://media.giphy.com/media/YRuFixSNWFVcXaxpmX/giphy.gif",      # Great job
+    ]
+    meme_url = random.choice(memes)
+
+    # Fun rotating messages
+    messages = [
+        "You're on fire today!",
+        "Another one bites the dust!",
+        "Keep smashing it!",
+        "Legend status confirmed!",
+        "Productivity level: BEAST MODE!",
+        "That's how it's done!",
+        "You make it look easy!",
+        "Crushing it!",
+        "Efficiency at its finest!",
+        "One less thing to worry about!",
+    ]
+    fun_msg = random.choice(messages)
+
+    if already_done:
+        heading = "Thank you! Good Work on Marking Another One Done!"
+        sub_text = f'<p style="color:#888;font-size:14px;margin-top:4px">Actioned by {actioned_by} at {actioned_at}</p>'
+    else:
+        heading = "Thank you! Good Work on Marking Another One Done!"
+        sub_text = ""
+
+    return f"""<!DOCTYPE html>
+<html><head><title>Task Complete!</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{{font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}}
+.card{{background:white;padding:40px 36px;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.2);text-align:center;max-width:480px;width:90%;animation:popIn 0.4s ease}}
+@keyframes popIn{{0%{{transform:scale(0.8);opacity:0}}100%{{transform:scale(1);opacity:1}}}}
+.check{{font-size:72px;margin-bottom:8px}}
+h2{{color:#27ae60;font-size:22px;margin:8px 0 4px}}
+.fun-msg{{color:#6c5ce7;font-size:18px;font-weight:600;margin:8px 0 16px}}
+.matter{{background:#f0fff4;padding:14px 20px;border-radius:10px;margin:16px 0;font-size:20px;font-weight:700;color:#1a7a3a;border:2px solid #27ae60}}
+.meme{{margin:20px 0 12px;border-radius:12px;overflow:hidden;display:inline-block;box-shadow:0 4px 16px rgba(0,0,0,0.1)}}
+.meme img{{max-width:100%;height:auto;max-height:280px;display:block}}
+p{{color:#666;font-size:13px;line-height:1.5}}
+</style></head>
+<body><div class="card">
+<div class="check">🎉</div>
+<h2>{heading}</h2>
+<div class="fun-msg">{fun_msg}</div>
+<div class="matter">Matter #{matter}</div>
+<div class="meme"><img src="{meme_url}" alt="Celebration meme"></div>
+{sub_text}
+</div></body></html>"""
 
 
 # --- 24-Hour Reminder Check ---
