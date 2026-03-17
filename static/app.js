@@ -381,7 +381,7 @@ function renderTable() {
                     <input type="checkbox" ${isSelected ? "checked" : ""}
                         onchange="toggleSelect(${n.id}, this.checked)">
                 </td>
-                <td data-label="Matter #"><span class="matter-num">${escapeHtml(n.matter_number)}</span></td>
+                <td data-label="Matter #"><span class="matter-num">${escapeHtml(n.matter_number)}</span><button class="copy-btn" title="Copy matter number" onclick="event.stopPropagation(); copyMatter('${escapeHtml(n.matter_number)}', this)">📋</button></td>
                 <td data-label="Type">${escapeHtml(n.notification_type)}</td>
                 <td data-label="From" class="from-cell" title="${escapeHtml(n.message_from || '')}">${truncate(n.message_from || '', 25)}</td>
                 <td data-label="Summary" title="${escapeHtml(n.summary)}">${truncate(n.summary, 60)}</td>
@@ -1020,6 +1020,25 @@ function isSettlementSoon(dateStr) {
     const now = new Date();
     const diffDays = (d - now) / (1000 * 60 * 60 * 24);
     return diffDays >= 0 && diffDays <= 3;
+}
+
+function copyMatter(matter, btn) {
+    navigator.clipboard.writeText(matter).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = "✅";
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+    }).catch(() => {
+        // Fallback for older browsers
+        const ta = document.createElement("textarea");
+        ta.value = matter;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        const orig = btn.textContent;
+        btn.textContent = "✅";
+        setTimeout(() => { btn.textContent = orig; }, 1200);
+    });
 }
 
 function showToast(message, type = "success") {
