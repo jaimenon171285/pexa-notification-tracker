@@ -82,14 +82,12 @@
             </select>
         </div>
         <div class="filter-group">
-            <label>Settlement Date</label>
-            <select id="filter-settlement" class="filter-select">
-                <option value="">All</option>
-                <option value="today">Today</option>
-                <option value="tomorrow">Tomorrow</option>
-                <option value="this_week">This Week</option>
-                <option value="overdue">Overdue</option>
-            </select>
+            <label>Settlement From</label>
+            <input type="date" id="filter-settlement-from" class="filter-input" style="width:140px">
+        </div>
+        <div class="filter-group">
+            <label>Settlement To</label>
+            <input type="date" id="filter-settlement-to" class="filter-input" style="width:140px">
         </div>
         <button class="btn-clear-filters" onclick="clearFilters()">Clear Filters</button>
         <button class="btn-send-reminders" onclick="confirmSendReminders()">Send Reminders</button>

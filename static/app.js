@@ -344,6 +344,8 @@ function renderTable() {
     const afterSettlement = applySettlementFilter(state.notifications);
     const filtered = applyQuickFilter(afterSettlement);
     const notifications = sortNotifications(filtered);
+    // Track visible IDs for select-all
+    state.visibleIds = notifications.map(n => n.id);
 
     if (notifications.length === 0) {
         tbody.innerHTML = `
@@ -483,7 +485,8 @@ function toggleSelect(id, checked) {
 
 function toggleSelectAll(checked) {
     if (checked) {
-        state.notifications.forEach(n => state.selectedIds.add(n.id));
+        // Only select notifications currently visible in the filtered view
+        (state.visibleIds || []).forEach(id => state.selectedIds.add(id));
     } else {
         state.selectedIds.clear();
     }
@@ -545,11 +548,13 @@ function applyFilters() {
 
 function clearFilters() {
     state.filters = { hide_closed: "true" };
-    state.settlementFilter = null;
+    state.settlementFrom = null;
+    state.settlementTo = null;
     document.getElementById("filter-matter").value = "";
     document.getElementById("filter-search").value = "";
     document.getElementById("filter-status").value = "";
-    document.getElementById("filter-settlement").value = "";
+    document.getElementById("filter-settlement-from").value = "";
+    document.getElementById("filter-settlement-to").value = "";
     document.querySelectorAll(".stat-card").forEach(c => c.classList.remove("active"));
     fetchNotifications();
 }
@@ -608,34 +613,35 @@ function applyQuickFilter(notifications) {
     });
 }
 
-// --- Settlement Date Filter (desktop) ---
+// --- Settlement Date Range Filter (desktop) ---
 
-state.settlementFilter = null; // 'today', 'tomorrow', 'this_week', 'overdue', or null
+state.settlementFrom = null; // Date object or null
+state.settlementTo = null;   // Date object or null
 
 function applySettlementFilter(notifications) {
-    if (!state.settlementFilter) return notifications;
-
-    const now = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (!state.settlementFrom && !state.settlementTo) return notifications;
 
     return notifications.filter(n => {
         if (!n.settlement_date) return false;
         const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
         if (!match) return false;
         const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
-        const diffDays = (sd - today) / (1000 * 60 * 60 * 24);
 
-        if (state.settlementFilter === "today") return diffDays >= 0 && diffDays < 1;
-        if (state.settlementFilter === "tomorrow") return diffDays >= 0 && diffDays < 2;
-        if (state.settlementFilter === "this_week") return diffDays >= 0 && diffDays <= 7;
-        if (state.settlementFilter === "overdue") return diffDays < 0;
+        if (state.settlementFrom && sd < state.settlementFrom) return false;
+        if (state.settlementTo) {
+            const toEnd = new Date(state.settlementTo);
+            toEnd.setHours(23, 59, 59, 999);
+            if (sd > toEnd) return false;
+        }
         return true;
     });
 }
 
-function onSettlementFilterChange() {
-    const val = document.getElementById("filter-settlement").value;
-    state.settlementFilter = val || null;
+function onSettlementDateChange() {
+    const fromVal = document.getElementById("filter-settlement-from").value;
+    const toVal = document.getElementById("filter-settlement-to").value;
+    state.settlementFrom = fromVal ? new Date(fromVal) : null;
+    state.settlementTo = toVal ? new Date(toVal) : null;
     renderTable();
 }
 
@@ -924,7 +930,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("filter-matter").addEventListener("input", debounce(applyFilters, 500));
     document.getElementById("filter-search").addEventListener("input", debounce(applyFilters, 500));
     document.getElementById("filter-status").addEventListener("change", applyFilters);
-    document.getElementById("filter-settlement").addEventListener("change", onSettlementFilterChange);
+    document.getElementById("filter-settlement-from").addEventListener("change", onSettlementDateChange);
+    document.getElementById("filter-settlement-to").addEventListener("change", onSettlementDateChange);
 });
 
 function debounce(fn, ms) {
