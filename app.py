@@ -227,16 +227,13 @@ def _is_settlement_urgent(settlement_date_str):
 
 def _build_html_email(message, done_link="", settlement_date=""):
     """Convert a plain-text task message into an HTML email.
-    The PEXA message content (between --- Full PEXA Message --- and --- End of Message ---)
-    is highlighted in bold red so the recipient can clearly see what needs to be done.
-    If settlement_date is within 3 days, the entire email body is rendered in red."""
+    Inside the PEXA message block, only the actual message content (between Subject:
+    and Note:/SUBSCRIBER REF) is shown in red. Everything else is normal black text."""
     import re as _re
 
     urgent = _is_settlement_urgent(settlement_date)
-    # Base text colour: red if urgent, otherwise default dark
-    body_color = "#cc0000" if urgent else "#333"
 
-    # Split out the PEXA message section and make it bold + red
+    # Split out the PEXA message section
     pexa_pattern = r"(--- Full PEXA Message ---\s*\n)(.*?)(\n\s*--- End of Message ---)"
     match = _re.search(pexa_pattern, message, _re.DOTALL)
 
@@ -247,16 +244,59 @@ def _build_html_email(message, done_link="", settlement_date=""):
         pexa_footer = match.group(3).strip()
         after = message[match.end():]
 
-        # Escape HTML in each section and convert newlines to <br>
+        # Within the PEXA content, find the actual message (between Subject: line
+        # and Note:/SUBSCRIBER REF) and colour only that part red
+        pexa_lines = pexa_content.split("\n")
+        subject_idx = -1
+        end_idx = len(pexa_lines)
+        for i, line in enumerate(pexa_lines):
+            stripped = line.strip().lower()
+            if stripped.startswith("subject:") and subject_idx == -1:
+                subject_idx = i
+            if subject_idx >= 0 and i > subject_idx:
+                if stripped.startswith("note:") and "sensitive data" in stripped:
+                    end_idx = i
+                    break
+                if _re.match(r"^subscriber\s+ref", stripped):
+                    end_idx = i
+                    break
+
+        # Build PEXA content with red message section
+        if subject_idx >= 0:
+            before_msg = pexa_lines[:subject_idx + 1]  # Up to and including Subject:
+            msg_lines = pexa_lines[subject_idx + 1:end_idx]
+            after_msg = pexa_lines[end_idx:]
+
+            # Strip leading/trailing blank lines from the message
+            while msg_lines and not msg_lines[0].strip():
+                msg_lines.pop(0)
+            while msg_lines and not msg_lines[-1].strip():
+                msg_lines.pop()
+
+            def _esc(t):
+                return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+            before_msg_html = "<br>\n".join(_esc(l) for l in before_msg)
+            msg_html = "<br>\n".join(_esc(l) for l in msg_lines)
+            after_msg_html = "<br>\n".join(_esc(l) for l in after_msg)
+
+            pexa_content_html = f"""{before_msg_html}
+<br>
+<div style="color: #cc0000; padding: 8px 0; margin: 4px 0;">
+{msg_html}
+</div>
+{after_msg_html}"""
+        else:
+            # Couldn't find Subject: line — show entire PEXA content normally
+            pexa_content_html = pexa_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
+
+        # Escape the surrounding text
         before_html = before.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
-        pexa_content_html = pexa_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
         after_html = after.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>\n")
 
         body_html = f"""{before_html}
 <br><b>{pexa_header}</b><br><br>
-<div style="color: #cc0000; font-weight: bold; font-size: 15px; padding: 12px 16px; background: #fff5f5; border-left: 4px solid #cc0000; margin: 8px 0;">
 {pexa_content_html}
-</div>
 <br><b>{pexa_footer}</b><br>
 {after_html}"""
     else:
@@ -284,9 +324,9 @@ def _build_html_email(message, done_link="", settlement_date=""):
 </div>
 <hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">"""
 
-    # Wrap in a basic HTML template
+    # Wrap in a basic HTML template — always black text, no bold
     return f"""<html>
-<body style="font-family: Arial, sans-serif; font-size: 14px; color: {body_color}; line-height: 1.5;{' font-weight: bold;' if urgent else ''}">
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">
 {urgent_banner}{body_html}
 </body>
 </html>"""
