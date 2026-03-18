@@ -773,18 +773,30 @@ function applyCompletedAtFilter(notifications) {
 // --- Send Reminders ---
 
 function confirmSendReminders() {
-    // Count how many "reviewed" tasks exist in the current view
-    const reviewedTasks = state.notifications.filter(n => n.status === "reviewed" && n.emailed_to);
-    if (reviewedTasks.length === 0) {
-        showToast("No tasks in Review status to send reminders for", "error");
+    // Only send reminders to selected tickets
+    if (state.selectedIds.size === 0) {
+        showToast("Please select the tickets you want to send reminders for first", "error");
         return;
     }
 
+    // Filter to only selected reviewed tasks that have been emailed
+    const selectedTasks = state.notifications.filter(n =>
+        state.selectedIds.has(n.id) && n.emailed_to
+    );
+
+    if (selectedTasks.length === 0) {
+        showToast("None of the selected tickets have been emailed out — nothing to remind", "error");
+        return;
+    }
+
+    // Store the IDs we'll send reminders for
+    state.reminderIds = selectedTasks.map(n => n.id);
+
     const modal = document.getElementById("reminder-modal");
-    const taskList = reviewedTasks.slice(0, 10).map(n =>
+    const taskList = selectedTasks.slice(0, 15).map(n =>
         `<li><strong>${escapeHtml(n.matter_number)}</strong> — emailed to ${renderEmailedTo(n.emailed_to)} — Settlement: ${escapeHtml(formatSettlementDateOnly(n.settlement_date))}</li>`
     ).join("");
-    const moreText = reviewedTasks.length > 10 ? `<p style="color:#888;font-size:13px">...and ${reviewedTasks.length - 10} more</p>` : "";
+    const moreText = selectedTasks.length > 15 ? `<p style="color:#888;font-size:13px">...and ${selectedTasks.length - 15} more</p>` : "";
 
     modal.innerHTML = `
         <div class="modal-backdrop" onclick="closeReminderModal()"></div>
@@ -794,9 +806,9 @@ function confirmSendReminders() {
                 <button class="modal-close" onclick="closeReminderModal()" style="color:white">&times;</button>
             </div>
             <div class="modal-body">
-                <p style="font-size:15px;font-weight:bold;color:#cc0000">Are you sure you want to send reminder emails to ALL ${reviewedTasks.length} task(s) currently in Review?</p>
+                <p style="font-size:15px;font-weight:bold;color:#cc0000">Send reminder emails for ${selectedTasks.length} selected task(s)?</p>
                 <p>This will send a reminder email to each person these tasks were originally emailed to:</p>
-                <ul style="max-height:200px;overflow-y:auto;font-size:13px;line-height:1.6">${taskList}</ul>
+                <ul style="max-height:250px;overflow-y:auto;font-size:13px;line-height:1.6">${taskList}</ul>
                 ${moreText}
             </div>
             <div class="modal-footer">
@@ -818,10 +830,15 @@ async function sendReminders() {
     btn.disabled = true;
     btn.textContent = "Sending...";
     try {
-        const resp = await fetch("/api/send-reminders", { method: "POST" });
+        const resp = await fetch("/api/send-reminders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: state.reminderIds || [] }),
+        });
         const data = await resp.json();
         if (data.success) {
             showToast(data.message || `Reminders sent to ${data.count} task(s)`, "success");
+            state.selectedIds.clear();
         } else {
             showToast(`Failed: ${data.error || "Unknown error"}`, "error");
         }
@@ -834,6 +851,7 @@ async function sendReminders() {
             btn.disabled = false;
             btn.textContent = "Yes, Send Reminders";
         }
+        state.reminderIds = null;
     }
 }
 
@@ -1061,11 +1079,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     const userSelect = document.getElementById("user-select");
     userSelect.value = state.currentUser;
 
+    // Default to settlement date = Today filter
+    state.settlementFilter = "today";
+    document.getElementById("filter-settlement").value = "today";
+
     // Check connection
     await checkConnection();
 
     // Load data
     await refreshAll();
+
+    // Highlight mobile quick filter button for today
+    const qfToday = document.getElementById("qf-today");
+    if (qfToday) qfToday.classList.add("active");
 
     // Auto-refresh every 60 seconds
     state.autoRefreshInterval = setInterval(refreshAll, 60000);

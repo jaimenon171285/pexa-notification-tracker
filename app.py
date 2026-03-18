@@ -714,25 +714,104 @@ def api_check_reminders():
 
 @app.route("/api/send-reminders", methods=["POST"])
 def api_send_reminders():
-    """Manually send reminders to ALL reviewed tasks that have been emailed out,
-    regardless of how long ago they were emailed. Resets reminder_sent so they get re-sent."""
+    """Send reminders for specific selected notification IDs.
+    Expects JSON body with 'ids' list of notification IDs."""
     try:
-        from database import get_all_reviewed_emailed_tasks, reset_reminder_sent
-        tasks = get_all_reviewed_emailed_tasks()
-        if not tasks:
-            return jsonify({"success": True, "count": 0, "message": "No reviewed tasks to send reminders for"})
+        data = request.json or {}
+        ids = data.get("ids", [])
+        if not ids:
+            return jsonify({"success": False, "error": "No notification IDs provided"}), 400
 
-        # Reset reminder_sent for all these tasks so they get picked up
+        from database import get_notification, reset_reminder_sent
+
+        # Gather valid tasks that have been emailed
+        tasks = []
+        for nid in ids:
+            n = get_notification(nid)
+            if n and n.get("emailed_to"):
+                tasks.append(n)
+
+        if not tasks:
+            return jsonify({"success": True, "count": 0, "message": "No emailed tasks found in selection"})
+
+        # Reset reminder_sent for selected tasks so they get picked up
         for task in tasks:
             reset_reminder_sent(task["id"])
 
-        # Now run the overdue check which will send to all of them
-        logger.info(f"Manual reminder trigger: {len(tasks)} reviewed tasks reset for reminders")
-        check_overdue_tasks_force()
-        return jsonify({"success": True, "count": len(tasks), "message": f"Reminders sent to {len(tasks)} reviewed task(s)"})
+        logger.info(f"Manual reminder trigger for {len(tasks)} selected task(s): {[t['id'] for t in tasks]}")
+
+        # Send reminders for these specific tasks
+        _send_reminders_for_tasks(tasks)
+
+        return jsonify({"success": True, "count": len(tasks), "message": f"Reminders sent for {len(tasks)} selected task(s)"})
     except Exception as e:
         logger.error(f"Manual reminder send failed: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _send_reminders_for_tasks(tasks):
+    """Send reminder emails for a specific list of task dicts."""
+    base_url = os.getenv("APP_URL", "https://pexa-notification-tracker.onrender.com")
+    send_mailbox = os.getenv("SEND_FROM_MAILBOX", graph_client.mailbox)
+
+    for task in tasks:
+        try:
+            nid = task["id"]
+            to_email = [e.strip() for e in task["emailed_to"].split(",") if e.strip()]
+            matter = task.get("matter_number", "Unknown")
+            ntype = task.get("notification_type", "PEXA Notification")
+            summary = task.get("summary", "")[:200]
+            settlement_date = task.get("settlement_date", "") or "N/A"
+
+            token = generate_action_token(nid)
+            done_link = f"{base_url}/done/{nid}?token={token}"
+
+            urgent_prefix = "URGENT - " if _is_settlement_today_or_tomorrow(settlement_date) else ""
+            subject = f"REMINDER: {urgent_prefix}{matter} - Settlement Date {_settlement_date_only(settlement_date)} - PEXA Action Required"
+            safe_matter = str(matter).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            safe_ntype = str(ntype).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            safe_summary = str(summary).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+            reminder_html = f"""<html>
+<body style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.5;">
+<p>Hi,</p>
+<p>This is a reminder that the following PEXA task was sent to you and has not yet been marked as complete:</p>
+
+<div style="color: #cc0000; padding: 12px 16px; background: #fff5f5; border-left: 4px solid #cc0000; margin: 12px 0;">
+    Matter #: {safe_matter}<br>
+    Type: {safe_ntype}<br>
+    Summary: {safe_summary}
+</div>
+
+<hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
+<div style="text-align: center; margin: 20px 0; padding: 16px; background: #f0fff4; border: 2px solid #27ae60; border-radius: 8px;">
+    <p style="font-size: 18px; font-weight: bold; color: #1a7a3a;">✅ PLEASE MARK THIS TASK AS COMPLETE</p>
+    <a href="{done_link}" style="display: inline-block; background: #27ae60; color: white; padding: 14px 32px; font-size: 16px; font-weight: bold; text-decoration: none; border-radius: 8px; margin: 8px 0;">Click Here To Mark As Done</a>
+    <p style="color: #333; font-size: 14px; font-weight: bold; margin-top: 14px;">You must click the button above once you have completed this task.</p>
+</div>
+<hr style="border: none; border-top: 2px solid #333; margin: 20px 0;">
+
+<p>If this task has <b>NOT</b> been completed, or if you need help, please email:</p>
+<ul>
+    <li><a href="mailto:sheriff@legalworld.com.au">sheriff@legalworld.com.au</a></li>
+    <li><a href="mailto:jai@legalworld.com.au">jai@legalworld.com.au</a></li>
+</ul>
+<p>Please let them know what is happening with this task and if you require any assistance.</p>
+
+<p>Thank you,<br>PEXA Notification Tracker</p>
+</body>
+</html>"""
+
+            cc_emails = "sheriff@legalworld.com.au,jai@legalworld.com.au"
+            graph_client.send_email(to_email, subject, "", from_mailbox=send_mailbox, cc_emails=cc_emails, body_html=reminder_html)
+
+            mark_reminder_sent(nid)
+            to_display = ", ".join(to_email) if isinstance(to_email, list) else to_email
+            add_note(nid, f"Manual reminder sent to {to_display}", "System")
+            logger.info(f"Reminder sent to {to_display} for notification {nid} (Matter #{matter})")
+
+        except Exception as e:
+            logger.error(f"Failed to send reminder for notification {task['id']}: {e}")
 
 
 # --- Startup ---
