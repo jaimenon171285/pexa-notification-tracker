@@ -563,7 +563,12 @@ function applyFilters() {
         delete state.filters.hide_closed;
     } else {
         delete state.filters.status;
-        state.filters.hide_closed = "true";
+        // Only hide closed if no settlement date filter is active
+        if (state.settlementFilter) {
+            delete state.filters.hide_closed;
+        } else {
+            state.filters.hide_closed = "true";
+        }
     }
     // Clear completed-at filter when not viewing completed
     if (statusVal !== "actioned") {
@@ -678,7 +683,18 @@ function onSettlementFilterChange() {
         document.getElementById("filter-settlement-from").value = "";
         document.getElementById("filter-settlement-to").value = "";
     }
-    renderTable();
+
+    // When a settlement date filter is active and no explicit status filter,
+    // remove hide_closed so all tickets show (new, reviewed, etc.)
+    if (val && !state.filters.status) {
+        delete state.filters.hide_closed;
+        fetchNotifications();
+    } else if (!val && !state.filters.status) {
+        state.filters.hide_closed = "true";
+        fetchNotifications();
+    } else {
+        renderTable();
+    }
 }
 
 function onCustomDateChange() {
@@ -1079,9 +1095,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const userSelect = document.getElementById("user-select");
     userSelect.value = state.currentUser;
 
-    // Default to settlement date = Today filter
+    // Default to settlement date = Today filter, show all statuses
     state.settlementFilter = "today";
     document.getElementById("filter-settlement").value = "today";
+    delete state.filters.hide_closed;
 
     // Check connection
     await checkConnection();
