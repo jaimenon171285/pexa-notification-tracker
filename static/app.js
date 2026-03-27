@@ -267,20 +267,61 @@ async function bulkAction(action) {
     await refreshAll();
 }
 
-async function pushToExcel() {
+function pushToExcel() {
     if (state.selectedIds.size === 0) {
         showToast("Please select the tickets you want to push to the spreadsheet", "error");
         return;
     }
-    const count = state.selectedIds.size;
-    if (!confirm(`Push ${count} selected notification(s) to the shared spreadsheet?`)) return;
 
-    showToast("Pushing to spreadsheet...", "success");
+    const selectedNotifs = state.notifications.filter(n => state.selectedIds.has(n.id));
+    state.excelPushIds = Array.from(state.selectedIds);
+
+    const modal = document.getElementById("reminder-modal");
+    const taskList = selectedNotifs.slice(0, 15).map(n =>
+        `<li><strong>${escapeHtml(n.matter_number)}</strong> — ${escapeHtml(n.notification_type)} — ${escapeHtml(formatSettlementDateOnly(n.settlement_date))}</li>`
+    ).join("");
+    const moreText = selectedNotifs.length > 15 ? `<p style="color:#888;font-size:13px">...and ${selectedNotifs.length - 15} more</p>` : "";
+
+    modal.innerHTML = `
+        <div class="modal-backdrop" onclick="closeExcelModal()"></div>
+        <div class="modal-content" style="max-width:550px">
+            <div class="modal-header" style="background:#1a7a3a">
+                <h3 style="color:white">Push to Spreadsheet?</h3>
+                <button class="modal-close" onclick="closeExcelModal()" style="color:white">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:15px;font-weight:bold;color:#1a7a3a">Push ${selectedNotifs.length} notification(s) to the shared Excel spreadsheet?</p>
+                <p>This will find the matching matter numbers across all tabs and update the PEXA Notes column (G):</p>
+                <ul style="max-height:250px;overflow-y:auto;font-size:13px;line-height:1.6">${taskList}</ul>
+                ${moreText}
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-dismiss" onclick="closeExcelModal()">Cancel</button>
+                <button class="btn btn-send" id="btn-confirm-excel" onclick="executePushToExcel()" style="background:#1a7a3a">Yes, Push to Spreadsheet</button>
+            </div>
+        </div>`;
+    modal.classList.add("open");
+}
+
+function closeExcelModal() {
+    const modal = document.getElementById("reminder-modal");
+    modal.classList.remove("open");
+    modal.innerHTML = "";
+    state.excelPushIds = null;
+}
+
+async function executePushToExcel() {
+    const btn = document.getElementById("btn-confirm-excel");
+    btn.disabled = true;
+    btn.textContent = "Pushing...";
+    showToast("Pushing to spreadsheet — this may take 20-30 seconds...", "success");
+    closeExcelModal();
+
     try {
         const resp = await fetch("/api/push-to-excel", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: Array.from(state.selectedIds) }),
+            body: JSON.stringify({ ids: state.excelPushIds || [] }),
         });
         const data = await resp.json();
         if (data.success) {
@@ -296,6 +337,8 @@ async function pushToExcel() {
         }
     } catch (e) {
         showToast(`Error: ${e.message}`, "error");
+    } finally {
+        state.excelPushIds = null;
     }
 }
 
