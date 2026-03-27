@@ -372,6 +372,20 @@ class GraphClient:
         response.raise_for_status()
         return response.json()
 
+    def insert_excel_column(self, drive_id, item_id, sheet_name, col_letter):
+        """Insert a new column at the given column letter, shifting existing columns right."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        range_addr = f"{col_letter}:{col_letter}"
+        url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/range(address='{range_addr}')/insert"
+        payload = {"shift": "Right"}
+        response = requests.post(url, headers=self._headers(), json=payload)
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.post(url, headers=self._headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def test_connection(self):
         """Test the Graph API connection and return status info."""
         try:

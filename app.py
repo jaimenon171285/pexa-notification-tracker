@@ -878,25 +878,54 @@ def api_push_to_excel():
                     if not values or len(values) < 2:
                         continue
 
-                    # Find the PEXA Notes column (or determine where to add it)
-                    # Look at header rows (rows 0-12 ish) for "PEXA Notes"
-                    pexa_notes_col = None
-                    header_row_idx = None
-                    num_cols = len(values[0]) if values else 0
+                    # PEXA Notes is always in column G (index 6)
+                    PEXA_COL = 6  # Column G = index 6
+                    PEXA_COL_LETTER = "G"
 
-                    # Scan first 15 rows for headers
+                    # Check if column G already has "PEXA Notes" header
+                    pexa_header_exists = False
+                    header_row_idx = None
+
                     for ri in range(min(15, len(values))):
                         for ci in range(len(values[ri])):
                             cell_val = str(values[ri][ci] or "").strip().lower()
-                            if cell_val == "pexa notes":
-                                pexa_notes_col = ci
+                            if cell_val in ("settlement", "settlement date", "jurisdiction", "adjustments"):
                                 header_row_idx = ri
                                 break
-                            # Also find the row that has other headers to know where to add
-                            if cell_val in ("settlement", "settlement date", "jurisdiction"):
+                        # Check if column G in this row says "PEXA Notes" or similar
+                        if ri < len(values) and PEXA_COL < len(values[ri]):
+                            if str(values[ri][PEXA_COL] or "").strip().lower() in ("pexa notes", "pexa note"):
+                                pexa_header_exists = True
                                 header_row_idx = ri
-                        if pexa_notes_col is not None:
-                            break
+                                break
+
+                    # If no PEXA Notes column in G yet, insert one (shifts existing G+ right)
+                    if not pexa_header_exists:
+                        try:
+                            graph_client.insert_excel_column(drive_id, item_id, sheet, PEXA_COL_LETTER)
+                            logger.info(f"Inserted new column G in sheet '{sheet}'")
+
+                            # Set the header
+                            if header_row_idx is not None:
+                                range_start_row_for_header = 1
+                                if address and "!" in address:
+                                    range_part = address.split("!")[1]
+                                    import re as _re
+                                    m = _re.match(r"[A-Z]+(\d+)", range_part)
+                                    if m:
+                                        range_start_row_for_header = int(m.group(1))
+                                header_excel_row = range_start_row_for_header + header_row_idx
+                            else:
+                                header_excel_row = 1
+                            graph_client.update_excel_cell(drive_id, item_id, sheet, f"G{header_excel_row}", "PEXA Notes")
+                            logger.info(f"Added 'PEXA Notes' header at {sheet}!G{header_excel_row}")
+
+                            # Re-read the used range since columns shifted
+                            values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                        except Exception as ins_err:
+                            logger.warning(f"Could not insert column G in '{sheet}': {ins_err}")
+                            # Fall back — column G might already exist from a previous run
+                            pass
 
                     # Search column A for the matter number
                     for ri in range(len(values)):
@@ -904,9 +933,6 @@ def api_push_to_excel():
                         # Match: "71263 PURCHASE" starts with "71263"
                         if cell_val and cell_val.startswith(matter_num):
                             found = True
-                            # Determine the actual row number in Excel (1-based)
-                            # The address tells us where the used range starts
-                            # e.g. "'30 Mar - 3 Apr'!A1:R150" means row index 0 = Excel row 1
                             range_start_row = 1
                             if address and "!" in address:
                                 range_part = address.split("!")[1]
@@ -916,29 +942,14 @@ def api_push_to_excel():
                                     range_start_row = int(match.group(1))
 
                             excel_row = range_start_row + ri
+                            target_cell = f"G{excel_row}"
 
-                            # If no PEXA Notes column exists, add the header
-                            if pexa_notes_col is None:
-                                pexa_notes_col = num_cols  # Next column after last
-                                if header_row_idx is not None:
-                                    header_excel_row = range_start_row + header_row_idx
-                                else:
-                                    header_excel_row = range_start_row + 10  # Default row 11
-                                # Column letter from index
-                                col_letter = _col_letter(pexa_notes_col)
-                                header_cell = f"{col_letter}{header_excel_row}"
-                                graph_client.update_excel_cell(drive_id, item_id, sheet, header_cell, "PEXA Notes")
-                                logger.info(f"Added 'PEXA Notes' header at {sheet}!{header_cell}")
-
-                            col_letter = _col_letter(pexa_notes_col)
-                            target_cell = f"{col_letter}{excel_row}"
-
-                            # Read existing value to append
+                            # Read existing value to append (don't overwrite)
                             existing = ""
-                            if pexa_notes_col < len(values[ri]):
-                                existing = str(values[ri][pexa_notes_col] or "").strip()
+                            if PEXA_COL < len(values[ri]):
+                                existing = str(values[ri][PEXA_COL] or "").strip()
 
-                            if existing:
+                            if existing and existing.lower() != "pexa notes":
                                 new_value = f"{existing}\n{note_text}"
                             else:
                                 new_value = note_text
@@ -947,7 +958,6 @@ def api_push_to_excel():
                             updated.append(f"Matter {matter_num} in '{sheet}' ({target_cell})")
                             logger.info(f"Updated {sheet}!{target_cell} for matter {matter_num}: {note_text}")
 
-                            # Add note to the notification in our DB
                             add_note(nid, f"Pushed to spreadsheet: {sheet}!{target_cell}", "System")
                             break
 
