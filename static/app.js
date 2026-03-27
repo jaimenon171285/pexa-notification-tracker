@@ -267,6 +267,38 @@ async function bulkAction(action) {
     await refreshAll();
 }
 
+async function pushToExcel() {
+    if (state.selectedIds.size === 0) {
+        showToast("Please select the tickets you want to push to the spreadsheet", "error");
+        return;
+    }
+    const count = state.selectedIds.size;
+    if (!confirm(`Push ${count} selected notification(s) to the shared spreadsheet?`)) return;
+
+    showToast("Pushing to spreadsheet...", "success");
+    try {
+        const resp = await fetch("/api/push-to-excel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: Array.from(state.selectedIds) }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            const msg = data.message || `Updated ${data.count} matter(s)`;
+            showToast(msg, "success");
+            if (data.errors && data.errors.length > 0) {
+                showToast(`Not found: ${data.errors.join(", ")}`, "error");
+            }
+            state.selectedIds.clear();
+            await refreshAll();
+        } else {
+            showToast(`Failed: ${data.error || "Unknown error"}`, "error");
+        }
+    } catch (e) {
+        showToast(`Error: ${e.message}`, "error");
+    }
+}
+
 async function checkConnection() {
     try {
         const resp = await fetch("/api/connection");

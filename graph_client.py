@@ -313,6 +313,65 @@ class GraphClient:
         logger.info(f"Fetched {len(emails)} emails from archive/Processed folder")
         return emails
 
+    # --- SharePoint / Excel methods ---
+
+    _sp_drive_id = None
+    _sp_item_id = None
+
+    def resolve_sharing_url(self, sharing_url):
+        """Resolve a SharePoint sharing URL to driveId and itemId.
+        Caches the result so subsequent calls don't re-resolve."""
+        if self._sp_drive_id and self._sp_item_id:
+            return self._sp_drive_id, self._sp_item_id
+
+        import base64
+        # Encode sharing URL as base64url per MS Graph spec
+        encoded = base64.b64encode(sharing_url.encode("utf-8")).decode("utf-8")
+        encoded = encoded.rstrip("=").replace("/", "_").replace("+", "-")
+        share_token = f"u!{encoded}"
+
+        url = f"{GRAPH_API_BASE}/shares/{share_token}/driveItem"
+        data = self._request("GET", url)
+        self._sp_drive_id = data["parentReference"]["driveId"]
+        self._sp_item_id = data["id"]
+        logger.info(f"Resolved SharePoint file: driveId={self._sp_drive_id[:20]}..., itemId={self._sp_item_id[:20]}...")
+        return self._sp_drive_id, self._sp_item_id
+
+    def get_excel_worksheets(self, drive_id, item_id):
+        """List all worksheet names in the Excel workbook."""
+        url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets"
+        data = self._request("GET", url)
+        return [ws["name"] for ws in data.get("value", [])]
+
+    def get_excel_range(self, drive_id, item_id, sheet_name, range_addr):
+        """Read a range from a worksheet. Returns the values as a 2D list."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/range(address='{range_addr}')"
+        data = self._request("GET", url)
+        return data.get("values", [])
+
+    def get_excel_used_range(self, drive_id, item_id, sheet_name):
+        """Read the used range of a worksheet. Returns values as 2D list and the address."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/usedRange"
+        data = self._request("GET", url, params={"$select": "values,address"})
+        return data.get("values", []), data.get("address", "")
+
+    def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value):
+        """Write a value to a specific cell in a worksheet."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')"
+        payload = {"values": [[value]]}
+        response = requests.patch(url, headers=self._headers(), json=payload)
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.patch(url, headers=self._headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
     def test_connection(self):
         """Test the Graph API connection and return status info."""
         try:

@@ -814,6 +814,184 @@ def _send_reminders_for_tasks(tasks):
             logger.error(f"Failed to send reminder for notification {task['id']}: {e}")
 
 
+# --- Push to SharePoint Excel ---
+
+@app.route("/api/push-to-excel", methods=["POST"])
+def api_push_to_excel():
+    """Push selected notifications to the shared SharePoint Excel spreadsheet.
+    Finds the matching matter number row across all weekly tabs and updates
+    the PEXA Notes column with notification type + date/time."""
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 400
+
+    data = request.json or {}
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No notification IDs provided"}), 400
+
+    try:
+        # Resolve the SharePoint file
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+
+        # Get all worksheet names
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        logger.info(f"Excel sheets: {sheets}")
+
+        # Skip non-weekly sheets
+        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
+
+        # Gather notifications to push
+        updated = []
+        errors = []
+
+        for nid in ids:
+            n = get_notification(nid)
+            if not n:
+                errors.append(f"ID {nid}: not found")
+                continue
+
+            matter_num = n.get("matter_number", "").strip()
+            ntype = n.get("notification_type", "PEXA Notification")
+            received = n.get("received_at", "")
+
+            # Format the note: "Type - dd/mm/yyyy hh:mm"
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(received.replace("Z", "+00:00"))
+                date_str = dt.strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                date_str = received[:16] if received else "Unknown"
+
+            note_text = f"{ntype} - {date_str}"
+
+            # Search across weekly sheets for this matter number
+            found = False
+            for sheet in sheets:
+                if sheet.lower().strip() in skip_sheets:
+                    continue
+                if "pexa check" in sheet.lower():
+                    continue
+
+                try:
+                    values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                    if not values or len(values) < 2:
+                        continue
+
+                    # Find the PEXA Notes column (or determine where to add it)
+                    # Look at header rows (rows 0-12 ish) for "PEXA Notes"
+                    pexa_notes_col = None
+                    header_row_idx = None
+                    num_cols = len(values[0]) if values else 0
+
+                    # Scan first 15 rows for headers
+                    for ri in range(min(15, len(values))):
+                        for ci in range(len(values[ri])):
+                            cell_val = str(values[ri][ci] or "").strip().lower()
+                            if cell_val == "pexa notes":
+                                pexa_notes_col = ci
+                                header_row_idx = ri
+                                break
+                            # Also find the row that has other headers to know where to add
+                            if cell_val in ("settlement", "settlement date", "jurisdiction"):
+                                header_row_idx = ri
+                        if pexa_notes_col is not None:
+                            break
+
+                    # Search column A for the matter number
+                    for ri in range(len(values)):
+                        cell_val = str(values[ri][0] or "").strip()
+                        # Match: "71263 PURCHASE" starts with "71263"
+                        if cell_val and cell_val.startswith(matter_num):
+                            found = True
+                            # Determine the actual row number in Excel (1-based)
+                            # The address tells us where the used range starts
+                            # e.g. "'30 Mar - 3 Apr'!A1:R150" means row index 0 = Excel row 1
+                            range_start_row = 1
+                            if address and "!" in address:
+                                range_part = address.split("!")[1]
+                                import re
+                                match = re.match(r"[A-Z]+(\d+)", range_part)
+                                if match:
+                                    range_start_row = int(match.group(1))
+
+                            excel_row = range_start_row + ri
+
+                            # If no PEXA Notes column exists, add the header
+                            if pexa_notes_col is None:
+                                pexa_notes_col = num_cols  # Next column after last
+                                if header_row_idx is not None:
+                                    header_excel_row = range_start_row + header_row_idx
+                                else:
+                                    header_excel_row = range_start_row + 10  # Default row 11
+                                # Column letter from index
+                                col_letter = _col_letter(pexa_notes_col)
+                                header_cell = f"{col_letter}{header_excel_row}"
+                                graph_client.update_excel_cell(drive_id, item_id, sheet, header_cell, "PEXA Notes")
+                                logger.info(f"Added 'PEXA Notes' header at {sheet}!{header_cell}")
+
+                            col_letter = _col_letter(pexa_notes_col)
+                            target_cell = f"{col_letter}{excel_row}"
+
+                            # Read existing value to append
+                            existing = ""
+                            if pexa_notes_col < len(values[ri]):
+                                existing = str(values[ri][pexa_notes_col] or "").strip()
+
+                            if existing:
+                                new_value = f"{existing}\n{note_text}"
+                            else:
+                                new_value = note_text
+
+                            graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell, new_value)
+                            updated.append(f"Matter {matter_num} in '{sheet}' ({target_cell})")
+                            logger.info(f"Updated {sheet}!{target_cell} for matter {matter_num}: {note_text}")
+
+                            # Add note to the notification in our DB
+                            add_note(nid, f"Pushed to spreadsheet: {sheet}!{target_cell}", "System")
+                            break
+
+                except Exception as e:
+                    logger.warning(f"Error scanning sheet '{sheet}': {e}")
+                    continue
+
+                if found:
+                    break
+
+            if not found:
+                errors.append(f"Matter {matter_num}: not found in any sheet")
+
+        msg_parts = []
+        if updated:
+            msg_parts.append(f"Updated {len(updated)} matter(s) in spreadsheet")
+        if errors:
+            msg_parts.append(f"{len(errors)} not found")
+
+        return jsonify({
+            "success": True,
+            "count": len(updated),
+            "updated": updated,
+            "errors": errors,
+            "message": ". ".join(msg_parts) or "No updates made",
+        })
+
+    except Exception as e:
+        logger.error(f"Push to Excel failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _col_letter(col_index):
+    """Convert 0-based column index to Excel column letter (0=A, 1=B, ..., 25=Z, 26=AA)."""
+    result = ""
+    idx = col_index
+    while True:
+        result = chr(65 + idx % 26) + result
+        idx = idx // 26 - 1
+        if idx < 0:
+            break
+    return result
+
+
 # --- Startup ---
 
 # Always init the database and scheduler (works for both gunicorn and flask dev)

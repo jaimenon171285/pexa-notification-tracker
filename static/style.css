@@ -269,6 +269,8 @@ body {
 .btn-bulk:hover { background: #f5f3ff; }
 .btn-bulk-reopen { border-color: #f59e0b; color: #92400e; }
 .btn-bulk-reopen:hover { background: #fffbeb; }
+.btn-bulk-excel { border-color: #217346; color: #217346; font-weight: 600; }
+.btn-bulk-excel:hover { background: #e8f5e9; }
 
 /* Table */
 .table-container {
