@@ -187,11 +187,37 @@ def _settlement_date_only(settlement_date_str):
     return match.group(1) if match else settlement_date_str
 
 
-def _extract_pexa_message(full_body):
-    """Extract the actual message content from a PEXA notification body.
-    The message sits between 'Subject:' and 'Note: Sensitive data...' or 'SUBSCRIBER REF'.
-    Returns the message text or empty string if not found."""
+def _extract_pexa_message(full_body, notification_type="", subject=""):
+    """Extract the actual message content from a PEXA notification.
+
+    For Workspace Update / Workspace Invitation / Signing Required / Loan Proceeds / Mortgage Activity
+    and similar non-message types: use the subject line (stripped of matter number prefix).
+
+    For New Message types: extract the message between 'Subject:' and 'SUBSCRIBER REF' in the body."""
     import re as _re
+
+    # For non-"New Message" types, the subject line is more useful
+    non_message_types = ("workspace update", "workspace invitation", "signing required",
+                         "loan proceeds created", "mortgage activity", "workspace status change",
+                         "financial settlement", "lodgement", "lodgment")
+    if notification_type and notification_type.strip().lower() in non_message_types:
+        if subject:
+            # Strip the matter number prefix like "71688 PURCHASE - " or "71688 PURCHASE: "
+            cleaned = _re.sub(r"^\d+\s+(?:PURCHASE|SALE)\s*[-:]\s*", "", subject, flags=_re.IGNORECASE).strip()
+            if cleaned and len(cleaned) > 5:
+                if len(cleaned) > 300:
+                    cleaned = cleaned[:297] + "..."
+                return cleaned
+        # Fall back to summary/body first line
+        if full_body:
+            first_line = full_body.split("\n")[0].strip()
+            if first_line and len(first_line) > 5:
+                if len(first_line) > 300:
+                    first_line = first_line[:297] + "..."
+                return first_line
+        return ""
+
+    # For "New Message" type: extract between Subject: and SUBSCRIBER REF / Note:
     if not full_body:
         return ""
     lines = full_body.split("\n")
@@ -212,13 +238,11 @@ def _extract_pexa_message(full_body):
 
     if subject_idx >= 0:
         msg_lines = lines[subject_idx + 1:end_idx]
-        # Strip empty lines from start/end
         while msg_lines and not msg_lines[0].strip():
             msg_lines.pop(0)
         while msg_lines and not msg_lines[-1].strip():
             msg_lines.pop()
         message = " ".join(l.strip() for l in msg_lines if l.strip())
-        # Limit length for Excel cell
         if len(message) > 300:
             message = message[:297] + "..."
         return message
@@ -894,9 +918,9 @@ def api_push_to_excel():
             received = n.get("received_at", "")
             full_body = n.get("full_body", "") or ""
 
-            # Extract the actual PEXA message from the full body
-            # The message sits between "Subject:" and "Note: Sensitive data..." or "SUBSCRIBER REF"
-            pexa_message = _extract_pexa_message(full_body)
+            # Extract the actual PEXA message content
+            subject_line = n.get("subject", "") or ""
+            pexa_message = _extract_pexa_message(full_body, notification_type=ntype, subject=subject_line)
 
             # Format the note: actual message + type + date
             try:
