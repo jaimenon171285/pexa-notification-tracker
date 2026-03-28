@@ -66,13 +66,36 @@ async function syncNow() {
 }
 
 async function updateStatus(id, status) {
+    // Find the next ticket in visible list before we refresh
+    let nextId = null;
+    if (state.expandedId === id && state.visibleIds) {
+        const idx = state.visibleIds.indexOf(id);
+        if (idx >= 0 && idx < state.visibleIds.length - 1) {
+            nextId = state.visibleIds[idx + 1];
+        }
+    }
+
     await fetch(`/api/notifications/${id}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status, user: state.currentUser }),
     });
     showToast(`Marked as ${status}`, "success");
+
+    // Auto-expand next ticket if we were viewing the one that was just actioned
+    if (nextId !== null) {
+        state.expandedId = nextId;
+    }
+
     await refreshAll();
+
+    // Scroll the expanded ticket into view
+    if (nextId !== null) {
+        setTimeout(() => {
+            const el = document.getElementById(`detail-${nextId}`);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+    }
 }
 
 async function addNote(id) {
