@@ -344,6 +344,31 @@ async function executePushToExcel() {
     }
 }
 
+async function pushSingleToExcel(id) {
+    const n = state.notifications.find(x => x.id === id);
+    if (!n) return;
+    if (!confirm(`Push Matter #${n.matter_number} (${n.notification_type}) to the spreadsheet?`)) return;
+    showToast("Pushing to spreadsheet...", "success");
+    try {
+        const resp = await fetch("/api/push-to-excel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: [id] }),
+        });
+        const data = await resp.json();
+        if (data.success) {
+            showToast(data.message || "Updated spreadsheet", "success");
+            if (data.errors && data.errors.length > 0) {
+                showToast(`Not found: ${data.errors.join(", ")}`, "error");
+            }
+        } else {
+            showToast(`Failed: ${data.error || "Unknown error"}`, "error");
+        }
+    } catch (e) {
+        showToast(`Error: ${e.message}`, "error");
+    }
+}
+
 async function checkConnection() {
     try {
         const resp = await fetch("/api/connection");
@@ -540,6 +565,7 @@ function renderDetail(n) {
                     ${n.status !== "actioned" ? `<button class="btn btn-action" onclick="event.stopPropagation(); updateStatus(${n.id}, 'actioned')">Mark Complete</button>` : ""}
                     ${n.status !== "dismissed" ? `<button class="btn btn-dismiss" onclick="event.stopPropagation(); updateStatus(${n.id}, 'dismissed')">Dismiss</button>` : ""}
                     ${n.status === "actioned" || n.status === "dismissed" ? `<button class="btn btn-reopen" onclick="event.stopPropagation(); updateStatus(${n.id}, 'new')">Reopen</button>` : ""}
+                    <button class="btn btn-bulk-excel" onclick="event.stopPropagation(); pushSingleToExcel(${n.id})">Push to Spreadsheet</button>
                 </div>
             </div>
             <div class="detail-section">

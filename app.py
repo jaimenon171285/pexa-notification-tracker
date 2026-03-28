@@ -187,6 +187,44 @@ def _settlement_date_only(settlement_date_str):
     return match.group(1) if match else settlement_date_str
 
 
+def _extract_pexa_message(full_body):
+    """Extract the actual message content from a PEXA notification body.
+    The message sits between 'Subject:' and 'Note: Sensitive data...' or 'SUBSCRIBER REF'.
+    Returns the message text or empty string if not found."""
+    import re as _re
+    if not full_body:
+        return ""
+    lines = full_body.split("\n")
+    subject_idx = -1
+    end_idx = len(lines)
+
+    for i, line in enumerate(lines):
+        stripped = line.strip().lower()
+        if stripped.startswith("subject:") and subject_idx == -1:
+            subject_idx = i
+        if subject_idx >= 0 and i > subject_idx:
+            if stripped.startswith("note:") and "sensitive data" in stripped:
+                end_idx = i
+                break
+            if _re.match(r"^subscriber\s+ref", stripped):
+                end_idx = i
+                break
+
+    if subject_idx >= 0:
+        msg_lines = lines[subject_idx + 1:end_idx]
+        # Strip empty lines from start/end
+        while msg_lines and not msg_lines[0].strip():
+            msg_lines.pop(0)
+        while msg_lines and not msg_lines[-1].strip():
+            msg_lines.pop()
+        message = " ".join(l.strip() for l in msg_lines if l.strip())
+        # Limit length for Excel cell
+        if len(message) > 300:
+            message = message[:297] + "..."
+        return message
+    return ""
+
+
 def _is_settlement_today_or_tomorrow(settlement_date_str):
     """Check if the settlement date is today or tomorrow."""
     import re as _re
@@ -854,8 +892,13 @@ def api_push_to_excel():
             matter_num = n.get("matter_number", "").strip()
             ntype = n.get("notification_type", "PEXA Notification")
             received = n.get("received_at", "")
+            full_body = n.get("full_body", "") or ""
 
-            # Format the note: "Type - dd/mm/yyyy hh:mm"
+            # Extract the actual PEXA message from the full body
+            # The message sits between "Subject:" and "Note: Sensitive data..." or "SUBSCRIBER REF"
+            pexa_message = _extract_pexa_message(full_body)
+
+            # Format the note: actual message + type + date
             try:
                 from datetime import datetime as _dt
                 dt = _dt.fromisoformat(received.replace("Z", "+00:00"))
@@ -863,7 +906,10 @@ def api_push_to_excel():
             except Exception:
                 date_str = received[:16] if received else "Unknown"
 
-            note_text = f"{ntype} - {date_str}"
+            if pexa_message:
+                note_text = f"{pexa_message} ({ntype} - {date_str})"
+            else:
+                note_text = f"{ntype} - {date_str}"
 
             # Search across weekly sheets for this matter number
             found = False
