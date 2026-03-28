@@ -314,6 +314,8 @@ async function executePushToExcel() {
     const btn = document.getElementById("btn-confirm-excel");
     btn.disabled = true;
     btn.textContent = "Pushing...";
+    // Save IDs before closing modal (closeExcelModal clears them)
+    const idsToSend = state.excelPushIds ? [...state.excelPushIds] : [];
     showToast("Pushing to spreadsheet — this may take 20-30 seconds...", "success");
     closeExcelModal();
 
@@ -321,7 +323,7 @@ async function executePushToExcel() {
         const resp = await fetch("/api/push-to-excel", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: state.excelPushIds || [] }),
+            body: JSON.stringify({ ids: idsToSend }),
         });
         const data = await resp.json();
         if (data.success) {
