@@ -66,13 +66,11 @@ async function syncNow() {
 }
 
 async function updateStatus(id, status) {
-    // Find the next ticket in visible list before we refresh
-    let nextId = null;
-    if (state.expandedId === id && state.visibleIds) {
-        const idx = state.visibleIds.indexOf(id);
-        if (idx >= 0 && idx < state.visibleIds.length - 1) {
-            nextId = state.visibleIds[idx + 1];
-        }
+    // Remember position in the visible list before we change status
+    const wasExpanded = state.expandedId === id;
+    let positionIdx = -1;
+    if (wasExpanded && state.visibleIds) {
+        positionIdx = state.visibleIds.indexOf(id);
     }
 
     await fetch(`/api/notifications/${id}/status`, {
@@ -82,15 +80,21 @@ async function updateStatus(id, status) {
     });
     showToast(`Marked as ${status}`, "success");
 
-    // Auto-expand next ticket if we were viewing the one that was just actioned
-    if (nextId !== null) {
-        state.expandedId = nextId;
-    }
+    // Clear expanded so refreshAll doesn't try to show old ticket
+    state.expandedId = null;
 
     await refreshAll();
 
-    // Scroll the expanded ticket into view
-    if (nextId !== null) {
+    // After refresh, auto-expand the ticket that is now at the same position
+    if (wasExpanded && positionIdx >= 0 && state.visibleIds && state.visibleIds.length > 0) {
+        // The actioned ticket is gone from the list, so the ticket that was below
+        // it is now at the same index position
+        const newIdx = Math.min(positionIdx, state.visibleIds.length - 1);
+        const nextId = state.visibleIds[newIdx];
+        state.expandedId = nextId;
+        renderTable();
+
+        // Scroll into view
         setTimeout(() => {
             const el = document.getElementById(`detail-${nextId}`);
             if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
