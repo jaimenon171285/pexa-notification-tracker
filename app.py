@@ -14,6 +14,7 @@ from database import init_db, get_notifications, get_notification, update_notifi
     get_all_reviewed_emailed_tasks, reset_reminder_sent
 from email_parser import parse_pexa_email
 from graph_client import GraphClient
+from workspace_creator import WorkspaceCreator
 
 load_dotenv()
 
@@ -26,8 +27,11 @@ app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret-change-me")
 
 graph_client = GraphClient()
+workspace_creator = WorkspaceCreator(graph_client)
 last_sync_time = None
 last_sync_status = "Never synced"
+last_workspace_sync_time = None
+last_workspace_sync_status = "Never synced"
 
 
 def _now_sydney():
@@ -77,6 +81,24 @@ def sync_emails():
         last_sync_status = f"Error: {str(e)}"
         logger.error(f"Sync failed: {e}")
         return -1
+
+
+def sync_workspaces():
+    """Check the Post Exchange Automation folder for new Actionstep emails
+    and auto-create portal workspaces for each one."""
+    global last_workspace_sync_time, last_workspace_sync_status
+    try:
+        results = workspace_creator.sync()
+        last_workspace_sync_time = _now_sydney()
+        last_workspace_sync_status = (
+            f"OK — {results['created']} created, {results['exists']} existed, "
+            f"{results['errors']} errors"
+        )
+        return results
+    except Exception as e:
+        last_workspace_sync_status = f"Error: {str(e)}"
+        logger.error(f"Workspace sync failed: {e}")
+        return None
 
 
 # --- Web Routes ---
@@ -168,6 +190,21 @@ def api_sync():
         "success": count >= 0,
         "new_count": count,
         "status": last_sync_status,
+    })
+
+
+@app.route("/api/workspace-sync", methods=["POST"])
+def api_workspace_sync():
+    results = sync_workspaces()
+    if results is None:
+        return jsonify({"success": False, "status": last_workspace_sync_status})
+    return jsonify({
+        "success": True,
+        "created": results["created"],
+        "exists": results["exists"],
+        "errors": results["errors"],
+        "processed": results["processed"],
+        "status": last_workspace_sync_status,
     })
 
 
@@ -1080,6 +1117,7 @@ init_db()
 sync_interval = int(os.getenv("SYNC_INTERVAL_MINUTES", "5"))
 scheduler = BackgroundScheduler()
 scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
+scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")
 scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
 scheduler.start()
 
