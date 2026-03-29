@@ -985,32 +985,52 @@ def api_push_to_excel():
                     if not values or len(values) < 2:
                         continue
 
-                    # PEXA Notes is always in column G (index 6)
-                    PEXA_COL = 6  # Column G = index 6
-                    PEXA_COL_LETTER = "G"
-
-                    # Check if column G already has "PEXA Notes" header
+                    # Find "PEXA Notes" column by scanning ALL columns in header rows
+                    PEXA_COL = None  # Will be set to the column index where "PEXA Notes" is found
+                    DEFAULT_COL = 6  # Column G = index 6 (for inserting if not found)
+                    DEFAULT_COL_LETTER = "G"
                     pexa_header_exists = False
                     header_row_idx = None
 
                     for ri in range(min(15, len(values))):
                         for ci in range(len(values[ri])):
                             cell_val = str(values[ri][ci] or "").strip().lower()
+                            # Find the header row (contains settlement, adjustments, etc.)
                             if cell_val in ("settlement", "settlement date", "jurisdiction", "adjustments"):
                                 header_row_idx = ri
-                                break
-                        # Check if column G in this row says "PEXA Notes" or similar
-                        if ri < len(values) and PEXA_COL < len(values[ri]):
-                            if str(values[ri][PEXA_COL] or "").strip().lower() in ("pexa notes", "pexa note"):
+                            # Check if this cell is PEXA Notes
+                            if cell_val in ("pexa notes", "pexa note"):
                                 pexa_header_exists = True
+                                PEXA_COL = ci
                                 header_row_idx = ri
                                 break
+                        if pexa_header_exists:
+                            break
 
-                    # If no PEXA Notes column in G yet, insert one (shifts existing G+ right)
+                    # Convert column index to letter for cell references
+                    def _col_letter(idx):
+                        """Convert 0-based column index to Excel column letter (0=A, 6=G, 26=AA)."""
+                        result = ""
+                        while True:
+                            result = chr(65 + idx % 26) + result
+                            idx = idx // 26 - 1
+                            if idx < 0:
+                                break
+                        return result
+
+                    if PEXA_COL is not None:
+                        PEXA_COL_LETTER = _col_letter(PEXA_COL)
+                    else:
+                        PEXA_COL = DEFAULT_COL
+                        PEXA_COL_LETTER = DEFAULT_COL_LETTER
+
+                    # If no PEXA Notes column found anywhere, insert one at column G
                     if not pexa_header_exists:
                         try:
-                            graph_client.insert_excel_column(drive_id, item_id, sheet, PEXA_COL_LETTER)
-                            logger.info(f"Inserted new column G in sheet '{sheet}'")
+                            graph_client.insert_excel_column(drive_id, item_id, sheet, DEFAULT_COL_LETTER)
+                            PEXA_COL = DEFAULT_COL
+                            PEXA_COL_LETTER = DEFAULT_COL_LETTER
+                            logger.info(f"Inserted new column {DEFAULT_COL_LETTER} in sheet '{sheet}'")
 
                             # Set the header
                             if header_row_idx is not None:
@@ -1024,8 +1044,8 @@ def api_push_to_excel():
                                 header_excel_row = range_start_row_for_header + header_row_idx
                             else:
                                 header_excel_row = 1
-                            graph_client.update_excel_cell(drive_id, item_id, sheet, f"G{header_excel_row}", "PEXA Notes")
-                            logger.info(f"Added 'PEXA Notes' header at {sheet}!G{header_excel_row}")
+                            graph_client.update_excel_cell(drive_id, item_id, sheet, f"{PEXA_COL_LETTER}{header_excel_row}", "PEXA Notes")
+                            logger.info(f"Added 'PEXA Notes' header at {sheet}!{PEXA_COL_LETTER}{header_excel_row}")
 
                             # Re-read the used range since columns shifted
                             values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
@@ -1049,7 +1069,7 @@ def api_push_to_excel():
                                     range_start_row = int(match.group(1))
 
                             excel_row = range_start_row + ri
-                            target_cell = f"G{excel_row}"
+                            target_cell = f"{PEXA_COL_LETTER}{excel_row}"
 
                             # Read existing value to append (don't overwrite)
                             existing = ""
