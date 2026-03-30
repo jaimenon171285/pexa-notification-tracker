@@ -237,6 +237,29 @@ body {
 }
 .btn-send-reminders:hover { background: #a30000; }
 
+.btn-save-default {
+    padding: 7px 14px;
+    border: 1px solid #2563eb;
+    border-radius: 6px;
+    background: #2563eb;
+    font-size: 13px;
+    cursor: pointer;
+    color: white;
+    font-weight: 600;
+}
+.btn-save-default:hover { background: #1d4ed8; }
+
+.btn-clear-default {
+    padding: 7px 14px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: white;
+    font-size: 13px;
+    cursor: pointer;
+    color: #6b7280;
+}
+.btn-clear-default:hover { background: #f9fafb; }
+
 /* Bulk Actions */
 .bulk-actions {
     display: none;

@@ -1214,6 +1214,74 @@ function showToast(message, type = "success") {
     setTimeout(() => toast.remove(), 4000);
 }
 
+// --- Default Filter Settings ---
+
+function saveDefaultFilters() {
+    const defaults = {
+        status: document.getElementById("filter-status").value || "",
+        settlement: document.getElementById("filter-settlement").value || "",
+        sortField: state.sortField,
+        sortDir: state.sortDir,
+    };
+    localStorage.setItem("pexaDefaultFilters", JSON.stringify(defaults));
+    showToast("Default filters saved! These will be applied each time you open the dashboard.", "success");
+}
+
+function restoreDefaultFilters() {
+    const saved = localStorage.getItem("pexaDefaultFilters");
+    if (saved) {
+        try {
+            const defaults = JSON.parse(saved);
+
+            // Restore status filter
+            if (defaults.status) {
+                state.filters.status = defaults.status;
+                delete state.filters.hide_closed;
+                document.getElementById("filter-status").value = defaults.status;
+                // Highlight stat card
+                const cardMap = { new: "card-new", reviewed: "card-review", actioned: "card-done", dismissed: "card-dismissed" };
+                const card = document.getElementById(cardMap[defaults.status]);
+                if (card) card.classList.add("active");
+            } else {
+                delete state.filters.status;
+            }
+
+            // Restore settlement filter
+            if (defaults.settlement) {
+                state.settlementFilter = defaults.settlement;
+                document.getElementById("filter-settlement").value = defaults.settlement;
+                if (defaults.settlement === "custom") {
+                    document.getElementById("filter-custom-dates").style.display = "flex";
+                }
+                // When settlement filter is active, show all statuses
+                if (!defaults.status) {
+                    delete state.filters.hide_closed;
+                }
+            } else {
+                state.settlementFilter = null;
+                document.getElementById("filter-settlement").value = "";
+                if (!defaults.status) {
+                    state.filters.hide_closed = "true";
+                }
+            }
+
+            // Restore sort
+            if (defaults.sortField) state.sortField = defaults.sortField;
+            if (defaults.sortDir) state.sortDir = defaults.sortDir;
+
+            return true;
+        } catch (e) {
+            console.error("Failed to restore default filters:", e);
+        }
+    }
+    return false;
+}
+
+function clearDefaultFilters() {
+    localStorage.removeItem("pexaDefaultFilters");
+    showToast("Default filters cleared. Dashboard will use standard defaults.", "success");
+}
+
 // --- Initialization ---
 
 async function refreshAll() {
@@ -1225,10 +1293,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     const userSelect = document.getElementById("user-select");
     userSelect.value = state.currentUser;
 
-    // Default to settlement date = Today filter, show all statuses
-    state.settlementFilter = "today";
-    document.getElementById("filter-settlement").value = "today";
-    delete state.filters.hide_closed;
+    // Restore saved default filters, or fall back to settlement date = Today
+    const restored = restoreDefaultFilters();
+    if (!restored) {
+        state.settlementFilter = "today";
+        document.getElementById("filter-settlement").value = "today";
+        delete state.filters.hide_closed;
+    }
 
     // Check connection
     await checkConnection();
@@ -1236,9 +1307,11 @@ document.addEventListener("DOMContentLoaded", async () => {
     // Load data
     await refreshAll();
 
-    // Highlight mobile quick filter button for today
-    const qfToday = document.getElementById("qf-today");
-    if (qfToday) qfToday.classList.add("active");
+    // Highlight mobile quick filter if settlement filter matches
+    if (state.settlementFilter === "today") {
+        const qfToday = document.getElementById("qf-today");
+        if (qfToday) qfToday.classList.add("active");
+    }
 
     // Auto-refresh every 60 seconds
     state.autoRefreshInterval = setInterval(refreshAll, 60000);
