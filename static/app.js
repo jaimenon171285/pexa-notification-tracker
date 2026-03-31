@@ -359,6 +359,16 @@ async function executePushToExcel() {
             if (data.errors && data.errors.length > 0) {
                 showToast(`Not found: ${data.errors.join(", ")}`, "error");
             }
+            // Mark all successfully pushed tickets as complete
+            for (const nid of idsToSend) {
+                try {
+                    await fetch(`/api/notifications/${nid}/status`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ status: "actioned", user: state.currentUser }),
+                    });
+                } catch (e) { /* ignore individual failures */ }
+            }
             state.selectedIds.clear();
             await refreshAll();
         } else {
