@@ -1220,6 +1220,10 @@ function saveDefaultFilters() {
     const defaults = {
         status: document.getElementById("filter-status").value || "",
         settlement: document.getElementById("filter-settlement").value || "",
+        settlementFrom: document.getElementById("filter-settlement-from").value || "",
+        settlementTo: document.getElementById("filter-settlement-to").value || "",
+        matter: document.getElementById("filter-matter").value || "",
+        search: document.getElementById("filter-search").value || "",
         sortField: state.sortField,
         sortDir: state.sortDir,
     };
@@ -1252,6 +1256,15 @@ function restoreDefaultFilters() {
                 document.getElementById("filter-settlement").value = defaults.settlement;
                 if (defaults.settlement === "custom") {
                     document.getElementById("filter-custom-dates").style.display = "flex";
+                    // Restore custom date range
+                    if (defaults.settlementFrom) {
+                        document.getElementById("filter-settlement-from").value = defaults.settlementFrom;
+                        state.settlementFrom = new Date(defaults.settlementFrom);
+                    }
+                    if (defaults.settlementTo) {
+                        document.getElementById("filter-settlement-to").value = defaults.settlementTo;
+                        state.settlementTo = new Date(defaults.settlementTo);
+                    }
                 }
                 // When settlement filter is active, show all statuses
                 if (!defaults.status) {
@@ -1263,6 +1276,16 @@ function restoreDefaultFilters() {
                 if (!defaults.status) {
                     state.filters.hide_closed = "true";
                 }
+            }
+
+            // Restore matter and search filters
+            if (defaults.matter) {
+                document.getElementById("filter-matter").value = defaults.matter;
+                state.filters.matter = defaults.matter;
+            }
+            if (defaults.search) {
+                document.getElementById("filter-search").value = defaults.search;
+                state.filters.search = defaults.search;
             }
 
             // Restore sort
