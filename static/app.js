@@ -853,9 +853,8 @@ function applySettlementFilter(notifications) {
     if (state.settlementFilter === "custom") {
         if (!state.settlementFrom && !state.settlementTo) return notifications;
         return notifications.filter(n => {
-            if (!n.settlement_date) return false;
-            const match = n.settlement_date.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-            if (!match) return false;
+            const match = (n.settlement_date || "").match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+            if (!match) return true; // Include tickets with no/unparseable settlement date
             const sd = new Date(parseInt(match[3]), parseInt(match[2]) - 1, parseInt(match[1]));
             if (state.settlementFrom && sd < state.settlementFrom) return false;
             if (state.settlementTo) {
