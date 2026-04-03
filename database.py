@@ -90,6 +90,9 @@ def init_db():
     # Backfill message_from for existing records
     _backfill_message_from(conn)
 
+    # Fix bad settlement dates (text instead of actual dates)
+    _fix_bad_settlement_dates(conn)
+
     conn.commit()
     cur.close()
     conn.close()
@@ -130,6 +133,42 @@ def _extract_from_party(text):
             return name
 
     return ""
+
+
+def _fix_bad_settlement_dates(conn):
+    """Re-parse settlement dates for records where the value doesn't look like a date."""
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id, full_body, settlement_date FROM notifications WHERE settlement_date IS NOT NULL AND settlement_date != ''"
+    )
+    rows = _fetchall(cur)
+    fixed = 0
+    for row in rows:
+        sd = row["settlement_date"] or ""
+        # Check if settlement_date looks like a valid date (contains dd/mm/yyyy)
+        if re.search(r"\d{1,2}/\d{1,2}/\d{4}", sd):
+            continue  # Already a valid date
+
+        # Try to re-extract from full_body
+        body = row["full_body"] or ""
+        match = re.search(
+            r"SETTLEMENT\s+DATE\s*(?:&|AND)\s*TIME\s*\n\s*(\d{1,2}/\d{1,2}/\d{4}[^\n]*)",
+            body, re.IGNORECASE
+        )
+        if not match:
+            match = re.search(
+                r"SETTLEMENT\s+DATE\s*(?:&|AND)\s*TIME\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{4}[^\n]*)",
+                body, re.IGNORECASE
+            )
+        new_sd = match.group(1).strip() if match else None
+        cur.execute(
+            "UPDATE notifications SET settlement_date = ? WHERE id = ?",
+            (new_sd, row["id"])
+        )
+        fixed += 1
+    if fixed:
+        conn.commit()
+    cur.close()
 
 
 # --- CRUD operations ---

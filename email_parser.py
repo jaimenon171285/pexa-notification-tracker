@@ -86,13 +86,32 @@ def extract_subscriber_ref(text):
 
 
 def extract_settlement_date(text):
-    """Extract settlement date and time."""
+    """Extract settlement date and time from the structured section of the email.
+    Only returns values that actually look like dates (contain dd/mm/yyyy)."""
+    # First try: look for the structured "SETTLEMENT DATE & TIME" line followed by a date on next line
     match = re.search(
-        r"SETTLEMENT\s+DATE\s*(?:&|AND)\s*TIME\s*[:\-]?\s*(.+?)(?:\n|$)",
+        r"SETTLEMENT\s+DATE\s*(?:&|AND)\s*TIME\s*\n\s*(\d{1,2}/\d{1,2}/\d{4}[^\n]*)",
         text, re.IGNORECASE
     )
     if match:
         return match.group(1).strip()
+
+    # Second try: same line format
+    match = re.search(
+        r"SETTLEMENT\s+DATE\s*(?:&|AND)\s*TIME\s*[:\-]?\s*(\d{1,2}/\d{1,2}/\d{4}[^\n]*)",
+        text, re.IGNORECASE
+    )
+    if match:
+        return match.group(1).strip()
+
+    # Third try: any line that has "SETTLEMENT DATE" near a date
+    match = re.search(
+        r"SETTLEMENT\s+DATE[^\n]*?(\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)\s*(?:AEST|AEDT)?)",
+        text, re.IGNORECASE
+    )
+    if match:
+        return match.group(1).strip()
+
     return None
 
 
