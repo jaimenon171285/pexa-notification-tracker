@@ -231,6 +231,20 @@ def api_debug_emails():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route("/api/keepalive")
+def api_keepalive():
+    """GET endpoint pinged by UptimeRobot every 5 min.
+    Runs both syncs so they work even if APScheduler jobs have died."""
+    notif_count = sync_emails()
+    ws_results   = sync_workspaces()
+    return jsonify({
+        "ok": True,
+        "notifications": notif_count,
+        "workspaces": ws_results or {},
+        "workspace_status": last_workspace_sync_status,
+    })
+
+
 @app.route("/api/connection")
 def api_connection():
     status = graph_client.test_connection()
