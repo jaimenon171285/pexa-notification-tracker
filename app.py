@@ -208,6 +208,29 @@ def api_workspace_sync():
     })
 
 
+@app.route("/api/debug-emails")
+def api_debug_emails():
+    """List emails currently in the Post Exchange Automation folder without processing them."""
+    try:
+        emails = workspace_creator.fetch_emails(max_results=20)
+        return jsonify({
+            "success": True,
+            "folder": workspace_creator.gc.mailbox,
+            "email_count": len(emails),
+            "emails": [
+                {
+                    "id": e["id"][:20] + "...",
+                    "subject": e["subject"],
+                    "has_body": bool(e.get("body_text") or e.get("body_html")),
+                }
+                for e in emails
+            ],
+            "last_workspace_sync_status": last_workspace_sync_status,
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route("/api/connection")
 def api_connection():
     status = graph_client.test_connection()
