@@ -167,11 +167,9 @@ class WorkspaceCreator:
         """
         results = {"created": 0, "exists": 0, "errors": 0, "processed": 0}
 
-        try:
-            emails = self.fetch_emails()
-        except Exception as e:
-            logger.error(f"WorkspaceCreator.sync: failed to fetch emails — {e}")
-            return results
+        # Let exceptions from fetch_emails propagate so sync_workspaces() can
+        # capture and surface the real error (e.g. auth failure, folder missing)
+        emails = self.fetch_emails()
 
         for email in emails:
             results["processed"] += 1
