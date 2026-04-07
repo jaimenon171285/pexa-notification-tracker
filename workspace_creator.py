@@ -122,14 +122,20 @@ class WorkspaceCreator:
     # ── Inbox search (diagnostic) ─────────────────────────────────────────────
 
     def search_inbox_for_actionstep(self, max_results=20):
-        """Search the entire mailbox for recent Actionstep POST EXCHANGE emails.
-        Used for diagnosing why the folder is empty."""
-        url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/messages"
+        """Fetch recent emails from inbox to find where Actionstep emails are landing."""
+        # Get the inbox folder ID
+        inbox_url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/mailFolders/Inbox"
+        try:
+            inbox = self.gc._request("GET", inbox_url)
+            inbox_id = inbox.get("id", "Inbox")
+        except Exception:
+            inbox_id = "Inbox"
+
+        url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/mailFolders/{inbox_id}/messages"
         params = {
             "$top":     max_results,
             "$orderby": "receivedDateTime desc",
-            "$select":  "id,subject,receivedDateTime,from,parentFolderId",
-            "$filter":  "contains(subject,'Post Exchange') or contains(subject,'POST EXCHANGE') or contains(from/emailAddress/address,'actionstep')",
+            "$select":  "id,subject,receivedDateTime,from",
         }
         try:
             data = self.gc._request("GET", url, params=params)
@@ -138,7 +144,6 @@ class WorkspaceCreator:
                     "subject":  m.get("subject", ""),
                     "from":     m.get("from", {}).get("emailAddress", {}).get("address", ""),
                     "received": m.get("receivedDateTime", ""),
-                    "folderId": m.get("parentFolderId", "")[:20] + "...",
                 }
                 for m in data.get("value", [])
             ]
