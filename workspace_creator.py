@@ -150,6 +150,52 @@ class WorkspaceCreator:
         except Exception as e:
             return [{"error": str(e)}]
 
+    def search_mailbox_for_actionstep(self, max_results=20):
+        """Search entire mailbox for any emails from actionstep domain or with POST EXCHANGE in subject."""
+        results = {}
+
+        # Search for emails from actionstep.com domain across entire mailbox
+        try:
+            url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/messages"
+            params = {
+                "$search":  '"actionstep"',
+                "$top":     max_results,
+                "$select":  "id,subject,receivedDateTime,from,parentFolderId",
+            }
+            data = self.gc._request("GET", url, params=params)
+            results["search_actionstep"] = [
+                {
+                    "subject":  m.get("subject", ""),
+                    "from":     m.get("from", {}).get("emailAddress", {}).get("address", ""),
+                    "received": m.get("receivedDateTime", ""),
+                }
+                for m in data.get("value", [])
+            ]
+        except Exception as e:
+            results["search_actionstep"] = [{"error": str(e)}]
+
+        # Also search for POST EXCHANGE
+        try:
+            url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/messages"
+            params = {
+                "$search":  '"POST EXCHANGE"',
+                "$top":     max_results,
+                "$select":  "id,subject,receivedDateTime,from",
+            }
+            data = self.gc._request("GET", url, params=params)
+            results["search_post_exchange"] = [
+                {
+                    "subject":  m.get("subject", ""),
+                    "from":     m.get("from", {}).get("emailAddress", {}).get("address", ""),
+                    "received": m.get("receivedDateTime", ""),
+                }
+                for m in data.get("value", [])
+            ]
+        except Exception as e:
+            results["search_post_exchange"] = [{"error": str(e)}]
+
+        return results
+
     def search_all_folders_for_actionstep(self, max_results=10):
         """Search Junk + all top-level folders for recent emails that look like Actionstep notifications."""
         results = {}

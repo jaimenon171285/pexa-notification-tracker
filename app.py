@@ -215,6 +215,7 @@ def api_debug_emails():
         emails = workspace_creator.fetch_emails(max_results=20)
         inbox_hits = workspace_creator.search_inbox_for_actionstep(max_results=20)
         all_folder_search = workspace_creator.search_all_folders_for_actionstep(max_results=5)
+        mailbox_search = workspace_creator.search_mailbox_for_actionstep(max_results=20)
         return jsonify({
             "success": True,
             "mailbox": workspace_creator.gc.mailbox,
@@ -229,6 +230,7 @@ def api_debug_emails():
             ],
             "inbox_recent": inbox_hits,
             "junk_deleted_archive": all_folder_search,
+            "mailbox_search_actionstep": mailbox_search,
             "last_workspace_sync_status": last_workspace_sync_status,
         })
     except Exception as e:
