@@ -360,7 +360,7 @@ class GraphClient:
         return data.get("values", []), data.get("address", "")
 
     def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value):
-        """Write a value to a specific cell in a worksheet."""
+        """Write a value to a specific cell in a worksheet, with no text wrapping."""
         import urllib.parse
         safe_sheet = urllib.parse.quote(sheet_name, safe="")
         url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')"
@@ -370,6 +370,18 @@ class GraphClient:
             self._get_token()
             response = requests.patch(url, headers=self._headers(), json=payload)
         response.raise_for_status()
+
+        # Disable text wrapping on the cell
+        try:
+            fmt_url = f"{url}/format"
+            fmt_payload = {"wrapText": False}
+            fmt_resp = requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
+            if fmt_resp.status_code == 401:
+                self._get_token()
+                requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
+        except Exception:
+            pass  # Non-critical
+
         return response.json()
 
     def insert_excel_column(self, drive_id, item_id, sheet_name, col_letter):
