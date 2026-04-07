@@ -119,6 +119,32 @@ class WorkspaceCreator:
         except Exception as e:
             logger.warning(f"WorkspaceCreator: failed to archive message {message_id[:20]}: {e}")
 
+    # ── Inbox search (diagnostic) ─────────────────────────────────────────────
+
+    def search_inbox_for_actionstep(self, max_results=20):
+        """Search the entire mailbox for recent Actionstep POST EXCHANGE emails.
+        Used for diagnosing why the folder is empty."""
+        url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/messages"
+        params = {
+            "$top":     max_results,
+            "$orderby": "receivedDateTime desc",
+            "$select":  "id,subject,receivedDateTime,from,parentFolderId",
+            "$filter":  "contains(subject,'Post Exchange') or contains(subject,'POST EXCHANGE') or contains(from/emailAddress/address,'actionstep')",
+        }
+        try:
+            data = self.gc._request("GET", url, params=params)
+            return [
+                {
+                    "subject":  m.get("subject", ""),
+                    "from":     m.get("from", {}).get("emailAddress", {}).get("address", ""),
+                    "received": m.get("receivedDateTime", ""),
+                    "folderId": m.get("parentFolderId", "")[:20] + "...",
+                }
+                for m in data.get("value", [])
+            ]
+        except Exception as e:
+            return [{"error": str(e)}]
+
     # ── Email fetching ───────────────────────────────────────────────────────
 
     def fetch_emails(self, max_results=50):
