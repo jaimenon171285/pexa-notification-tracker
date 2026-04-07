@@ -150,6 +150,46 @@ class WorkspaceCreator:
         except Exception as e:
             return [{"error": str(e)}]
 
+    def search_all_folders_for_actionstep(self, max_results=10):
+        """Search Junk + all top-level folders for recent emails that look like Actionstep notifications."""
+        results = {}
+
+        # Well-known folders to check (Graph API well-known names)
+        well_known = ["junkemail", "deleteditems", "archive"]
+        for wk in well_known:
+            try:
+                url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/mailFolders/{wk}/messages"
+                params = {
+                    "$top":     max_results,
+                    "$orderby": "receivedDateTime desc",
+                    "$select":  "id,subject,receivedDateTime,from",
+                }
+                data = self.gc._request("GET", url, params=params)
+                msgs = data.get("value", [])
+                results[wk] = [
+                    {
+                        "subject":  m.get("subject", ""),
+                        "from":     m.get("from", {}).get("emailAddress", {}).get("address", ""),
+                        "received": m.get("receivedDateTime", ""),
+                    }
+                    for m in msgs
+                ]
+            except Exception as e:
+                results[wk] = [{"error": str(e)}]
+
+        # Also list ALL top-level folder names so we can see what folders exist
+        try:
+            folders_url = f"{GRAPH_API_BASE}/users/{self.gc.mailbox}/mailFolders"
+            folders_data = self.gc._request("GET", folders_url, params={"$top": 100, "$select": "displayName,unreadItemCount,totalItemCount"})
+            results["all_folders"] = [
+                {"name": f["displayName"], "total": f.get("totalItemCount", 0), "unread": f.get("unreadItemCount", 0)}
+                for f in folders_data.get("value", [])
+            ]
+        except Exception as e:
+            results["all_folders"] = [{"error": str(e)}]
+
+        return results
+
     # ── Email fetching ───────────────────────────────────────────────────────
 
     def fetch_emails(self, max_results=50):

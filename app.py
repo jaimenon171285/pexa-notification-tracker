@@ -210,10 +210,11 @@ def api_workspace_sync():
 
 @app.route("/api/debug-emails")
 def api_debug_emails():
-    """List emails in the Post Exchange Automation folder + search inbox for Actionstep emails."""
+    """List emails in the Post Exchange Automation folder + search inbox/junk/all folders."""
     try:
         emails = workspace_creator.fetch_emails(max_results=20)
         inbox_hits = workspace_creator.search_inbox_for_actionstep(max_results=20)
+        all_folder_search = workspace_creator.search_all_folders_for_actionstep(max_results=5)
         return jsonify({
             "success": True,
             "mailbox": workspace_creator.gc.mailbox,
@@ -226,7 +227,8 @@ def api_debug_emails():
                 }
                 for e in emails
             ],
-            "inbox_actionstep_search": inbox_hits,
+            "inbox_recent": inbox_hits,
+            "junk_deleted_archive": all_folder_search,
             "last_workspace_sync_status": last_workspace_sync_status,
         })
     except Exception as e:
