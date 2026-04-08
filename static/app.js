@@ -341,59 +341,89 @@ async function executePushToExcel() {
     const btn = document.getElementById("btn-confirm-excel");
     btn.disabled = true;
     btn.textContent = "Pushing...";
-    // Save IDs before closing modal (closeExcelModal clears them)
     const idsToSend = state.excelPushIds ? [...state.excelPushIds] : [];
-    showToast("Pushing to spreadsheet — this may take 20-30 seconds...", "success");
     closeExcelModal();
 
-    try {
-        const resp = await fetch("/api/push-to-excel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: idsToSend }),
-        });
-        const data = await resp.json();
-        if (data.success) {
-            const msg = data.message || `Updated ${data.count} matter(s)`;
-            showToast(msg, "success");
-            if (data.errors && data.errors.length > 0) {
-                showToast(`Not found: ${data.errors.join(", ")}`, "error");
-            }
-            state.selectedIds.clear();
-            await refreshAll();
-        } else {
-            showToast(`Failed: ${data.error || "Unknown error"}`, "error");
-        }
-    } catch (e) {
-        showToast(`Error: ${e.message}`, "error");
-    } finally {
-        state.excelPushIds = null;
+    // Step 1: Mark complete FIRST (instant) so tickets leave the view
+    for (const nid of idsToSend) {
+        try {
+            await fetch(`/api/notifications/${nid}/status`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ status: "actioned", user: state.currentUser }),
+            });
+        } catch (e) { /* continue */ }
     }
+    state.selectedIds.clear();
+    showToast(`Marked ${idsToSend.length} ticket(s) complete. Pushing to spreadsheet in background...`, "success");
+    await refreshAll();
+
+    // Step 2: Push to spreadsheet in the BACKGROUND (don't block the UI)
+    fetch("/api/push-to-excel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: idsToSend, skip_complete: true }),
+    }).then(r => r.json()).then(data => {
+        if (data.success) {
+            showToast(data.message || `Spreadsheet updated for ${data.count} matter(s)`, "success");
+            if (data.errors && data.errors.length > 0) {
+                showToast(`Not found in spreadsheet: ${data.errors.join(", ")}`, "error");
+            }
+        } else {
+            showToast(`Spreadsheet push failed: ${data.error || "Unknown error"}`, "error");
+        }
+    }).catch(e => {
+        showToast(`Spreadsheet push error: ${e.message}`, "error");
+    });
+
+    state.excelPushIds = null;
 }
 
 async function pushSingleToExcel(id) {
     const n = state.notifications.find(x => x.id === id);
     if (!n) return;
-    if (!confirm(`Push Matter #${n.matter_number} (${n.notification_type}) to the spreadsheet?`)) return;
-    showToast("Pushing to spreadsheet...", "success");
-    try {
-        const resp = await fetch("/api/push-to-excel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: [id] }),
-        });
-        const data = await resp.json();
-        if (data.success) {
-            showToast(data.message || "Updated spreadsheet", "success");
-            if (data.errors && data.errors.length > 0) {
-                showToast(`Not found: ${data.errors.join(", ")}`, "error");
-            }
-        } else {
-            showToast(`Failed: ${data.error || "Unknown error"}`, "error");
+
+    // Find next ticket for auto-expand
+    let nextId = null;
+    if (state.expandedId === id && state.visibleIds) {
+        const idx = state.visibleIds.indexOf(id);
+        if (idx >= 0 && idx < state.visibleIds.length - 1) {
+            nextId = state.visibleIds[idx + 1];
         }
-    } catch (e) {
-        showToast(`Error: ${e.message}`, "error");
     }
+
+    // Step 1: Mark complete FIRST (instant)
+    await fetch(`/api/notifications/${id}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "actioned", user: state.currentUser }),
+    });
+    showToast("Marked complete. Pushing to spreadsheet in background...", "success");
+
+    // Auto-expand next ticket
+    if (nextId !== null) state.expandedId = nextId;
+    await refreshAll();
+    if (nextId !== null) {
+        setTimeout(() => {
+            const el = document.getElementById(`detail-${nextId}`);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+    }
+
+    // Step 2: Push to spreadsheet in BACKGROUND
+    fetch("/api/push-to-excel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: [id], skip_complete: true }),
+    }).then(r => r.json()).then(data => {
+        if (data.success) {
+            showToast(data.message || "Spreadsheet updated", "success");
+        } else {
+            showToast(`Spreadsheet failed: ${data.error}`, "error");
+        }
+    }).catch(e => {
+        showToast(`Spreadsheet error: ${e.message}`, "error");
+    });
 }
 
 async function checkConnection() {

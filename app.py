@@ -1141,15 +1141,17 @@ def api_push_to_excel():
             if not found:
                 errors.append(f"Matter {matter_num}: not found in any sheet")
 
-        # Auto-mark successfully pushed tickets as complete
-        for nid in ids:
-            try:
-                n = get_notification(nid)
-                if n and n["status"] != "actioned":
-                    update_notification_status(nid, "actioned", user="Push to Spreadsheet")
-                    add_note(nid, "Auto-marked complete after pushing to spreadsheet", "System")
-            except Exception as e:
-                logger.warning(f"Failed to auto-complete notification {nid}: {e}")
+        # Auto-mark successfully pushed tickets as complete (unless frontend already did it)
+        skip_complete = data.get("skip_complete", False)
+        if not skip_complete:
+            for nid in ids:
+                try:
+                    n = get_notification(nid)
+                    if n and n["status"] != "actioned":
+                        update_notification_status(nid, "actioned", user="Push to Spreadsheet")
+                        add_note(nid, "Auto-marked complete after pushing to spreadsheet", "System")
+                except Exception as e:
+                    logger.warning(f"Failed to auto-complete notification {nid}: {e}")
 
         msg_parts = []
         if updated:
