@@ -371,17 +371,11 @@ class GraphClient:
             response = requests.patch(url, headers=self._headers(), json=payload)
         response.raise_for_status()
 
-        # Disable text wrapping and set bright green fill for new entries
+        # Disable text wrapping only — don't touch cell colours
         try:
             fmt_url = f"{url}/format"
             fmt_payload = {"wrapText": False}
             requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
-
-            # Set bright green fill to indicate new/unactioned entry
-            # Users can manually change this to soft green once actioned
-            fill_url = f"{url}/format/fill"
-            fill_payload = {"color": "#00FF00"}
-            requests.patch(fill_url, headers=self._headers(), json=fill_payload)
         except Exception:
             pass  # Non-critical
 
