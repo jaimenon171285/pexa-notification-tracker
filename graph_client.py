@@ -371,14 +371,16 @@ class GraphClient:
             response = requests.patch(url, headers=self._headers(), json=payload)
         response.raise_for_status()
 
-        # Disable text wrapping on the cell
+        # Disable text wrapping and clear fill colour so user can set their own
         try:
             fmt_url = f"{url}/format"
             fmt_payload = {"wrapText": False}
-            fmt_resp = requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
-            if fmt_resp.status_code == 401:
-                self._get_token()
-                requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
+            requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
+
+            # Clear fill to "no fill" so the cell inherits the column/row colour
+            fill_url = f"{url}/format/fill"
+            fill_payload = {"color": ""}
+            requests.patch(fill_url, headers=self._headers(), json=fill_payload)
         except Exception:
             pass  # Non-critical
 
