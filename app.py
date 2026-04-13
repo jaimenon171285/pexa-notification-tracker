@@ -1120,7 +1120,7 @@ def api_push_to_excel():
                                 existing = str(values[ri][PEXA_COL] or "").strip()
 
                             if existing and existing.lower() != "pexa notes":
-                                new_value = f"{existing}\n{note_text}"
+                                new_value = f"{note_text}\n{existing}"
                             else:
                                 new_value = note_text
 
