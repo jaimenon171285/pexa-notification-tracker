@@ -358,23 +358,22 @@ async function executePushToExcel() {
     showToast(`Marked ${idsToSend.length} ticket(s) complete. Pushing to spreadsheet in background...`, "success");
     await refreshAll();
 
-    // Step 2: Push to spreadsheet in the BACKGROUND (don't block the UI)
-    fetch("/api/push-to-excel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: idsToSend, skip_complete: true }),
-    }).then(r => r.json()).then(data => {
+    // Step 2: Queue the push on the backend (runs in server thread, survives tab close)
+    try {
+        const resp = await fetch("/api/push-to-excel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: idsToSend, skip_complete: true, async_mode: true }),
+        });
+        const data = await resp.json();
         if (data.success) {
-            showToast(data.message || `Spreadsheet updated for ${data.count} matter(s)`, "success");
-            if (data.errors && data.errors.length > 0) {
-                showToast(`Not found in spreadsheet: ${data.errors.join(", ")}`, "error");
-            }
+            showToast(data.message || `Queued ${data.count} for background push`, "success");
         } else {
-            showToast(`Spreadsheet push failed: ${data.error || "Unknown error"}`, "error");
+            showToast(`Queue failed: ${data.error || "Unknown error"}`, "error");
         }
-    }).catch(e => {
-        showToast(`Spreadsheet push error: ${e.message}`, "error");
-    });
+    } catch (e) {
+        showToast(`Queue error: ${e.message}`, "error");
+    }
 
     state.excelPushIds = null;
 }
@@ -410,20 +409,16 @@ async function pushSingleToExcel(id) {
         }, 100);
     }
 
-    // Step 2: Push to spreadsheet in BACKGROUND
-    fetch("/api/push-to-excel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ids: [id], skip_complete: true }),
-    }).then(r => r.json()).then(data => {
-        if (data.success) {
-            showToast(data.message || "Spreadsheet updated", "success");
-        } else {
-            showToast(`Spreadsheet failed: ${data.error}`, "error");
-        }
-    }).catch(e => {
-        showToast(`Spreadsheet error: ${e.message}`, "error");
-    });
+    // Step 2: Queue the push on backend (runs server-side in thread)
+    try {
+        await fetch("/api/push-to-excel", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: [id], skip_complete: true, async_mode: true }),
+        });
+    } catch (e) {
+        showToast(`Queue error: ${e.message}`, "error");
+    }
 }
 
 async function checkConnection() {

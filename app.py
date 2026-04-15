@@ -958,19 +958,11 @@ def _send_reminders_for_tasks(tasks):
 
 # --- Push to SharePoint Excel ---
 
-@app.route("/api/push-to-excel", methods=["POST"])
-def api_push_to_excel():
-    """Push selected notifications to the shared SharePoint Excel spreadsheet.
-    Finds the matching matter number row across all weekly tabs and updates
-    the PEXA Notes column with notification type + date/time."""
+def _do_push_to_excel(ids, skip_complete=False):
+    """Core push logic — runs in a thread for background mode. Returns dict with results."""
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     if not sharepoint_url:
-        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 400
-
-    data = request.json or {}
-    ids = data.get("ids", [])
-    if not ids:
-        return jsonify({"success": False, "error": "No notification IDs provided"}), 400
+        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
 
     try:
         # Resolve the SharePoint file
@@ -1159,16 +1151,107 @@ def api_push_to_excel():
         if errors:
             msg_parts.append(f"{len(errors)} not found")
 
-        return jsonify({
+        return {
             "success": True,
             "count": len(updated),
             "updated": updated,
             "errors": errors,
             "message": ". ".join(msg_parts) or "No updates made",
-        })
+        }
 
     except Exception as e:
         logger.error(f"Push to Excel failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@app.route("/api/push-to-excel", methods=["POST"])
+def api_push_to_excel():
+    """Push selected notifications to the shared SharePoint Excel spreadsheet.
+    If async_mode=true, runs in background thread and returns immediately."""
+    data = request.json or {}
+    ids = data.get("ids", [])
+    if not ids:
+        return jsonify({"success": False, "error": "No notification IDs provided"}), 400
+
+    skip_complete = data.get("skip_complete", False)
+    async_mode = data.get("async_mode", False)
+
+    if async_mode:
+        # Run in background thread so the HTTP response returns immediately
+        import threading
+        def _bg_push():
+            try:
+                result = _do_push_to_excel(ids, skip_complete=skip_complete)
+                logger.info(f"Background push complete: {result.get('message', 'done')}")
+            except Exception as e:
+                logger.error(f"Background push failed: {e}", exc_info=True)
+        threading.Thread(target=_bg_push, daemon=True).start()
+        return jsonify({
+            "success": True,
+            "count": len(ids),
+            "message": f"Queued {len(ids)} ticket(s) for background push",
+            "background": True,
+        })
+
+    # Synchronous mode
+    result = _do_push_to_excel(ids, skip_complete=skip_complete)
+    if not result.get("success"):
+        return jsonify(result), 500
+    return jsonify(result)
+
+
+@app.route("/api/recover-missing-pushes", methods=["POST"])
+def api_recover_missing_pushes():
+    """Find all actioned tickets without a spreadsheet push note and push them now.
+    Runs in the background."""
+    data = request.json or {}
+    days = int(data.get("days", 3))
+    try:
+        from datetime import datetime as _dt, timedelta as _td
+        cutoff = _dt.utcnow() - _td(days=days)
+
+        notifs = get_notifications({"status": "actioned"})
+        missing_ids = []
+        for n in notifs:
+            notes = (n.get("notes") or "").lower()
+            if "spreadsheet" in notes:
+                continue
+            actioned_by = n.get("actioned_by") or ""
+            if actioned_by in ("System", "Push to Spreadsheet", "Via Email Link"):
+                continue
+            actioned_at = n.get("actioned_at") or ""
+            if not actioned_at:
+                continue
+            try:
+                dt = _dt.fromisoformat(actioned_at.replace("Z", "").split("+")[0])
+                if dt < cutoff:
+                    continue
+            except Exception:
+                continue
+            missing_ids.append(n["id"])
+
+        if not missing_ids:
+            return jsonify({"success": True, "count": 0, "message": "No missing pushes found"})
+
+        logger.info(f"Recovery: queuing {len(missing_ids)} missing pushes in background")
+
+        # Run in background thread
+        import threading
+        def _bg_recover():
+            try:
+                result = _do_push_to_excel(missing_ids, skip_complete=True)
+                logger.info(f"Recovery push complete: {result.get('message', 'done')}")
+            except Exception as e:
+                logger.error(f"Recovery push failed: {e}", exc_info=True)
+        threading.Thread(target=_bg_recover, daemon=True).start()
+
+        return jsonify({
+            "success": True,
+            "count": len(missing_ids),
+            "message": f"Queued {len(missing_ids)} missing ticket(s) for background recovery",
+        })
+    except Exception as e:
+        logger.error(f"Recovery failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
