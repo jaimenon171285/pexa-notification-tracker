@@ -975,6 +975,9 @@ def _do_push_to_excel(ids, skip_complete=False):
         # Skip non-weekly sheets
         skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
 
+        # Cache sheet contents so we only fetch each sheet once per batch
+        sheet_cache = {}
+
         # Gather notifications to push
         updated = []
         errors = []
@@ -1016,7 +1019,11 @@ def _do_push_to_excel(ids, skip_complete=False):
                     continue
 
                 try:
-                    values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                    if sheet in sheet_cache:
+                        values, address = sheet_cache[sheet]
+                    else:
+                        values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                        sheet_cache[sheet] = (values, address)
                     if not values or len(values) < 2:
                         continue
 
@@ -1082,8 +1089,9 @@ def _do_push_to_excel(ids, skip_complete=False):
                             graph_client.update_excel_cell(drive_id, item_id, sheet, f"{PEXA_COL_LETTER}{header_excel_row}", "PEXA Notes")
                             logger.info(f"Added 'PEXA Notes' header at {sheet}!{PEXA_COL_LETTER}{header_excel_row}")
 
-                            # Re-read the used range since columns shifted
+                            # Re-read the used range since columns shifted and update cache
                             values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                            sheet_cache[sheet] = (values, address)
                         except Exception as ins_err:
                             logger.warning(f"Could not insert column G in '{sheet}': {ins_err}")
                             # Fall back — column G might already exist from a previous run
@@ -1119,6 +1127,16 @@ def _do_push_to_excel(ids, skip_complete=False):
                             graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell, new_value)
                             updated.append(f"Matter {matter_num} in '{sheet}' ({target_cell})")
                             logger.info(f"Updated {sheet}!{target_cell} for matter {matter_num}: {note_text}")
+
+                            # Update the cache so subsequent tickets for the same matter see the new value
+                            try:
+                                # Ensure row has enough columns
+                                while len(values[ri]) <= PEXA_COL:
+                                    values[ri].append("")
+                                values[ri][PEXA_COL] = new_value
+                                sheet_cache[sheet] = (values, address)
+                            except Exception:
+                                pass
 
                             add_note(nid, f"Pushed to spreadsheet: {sheet}!{target_cell}", "System")
                             break
