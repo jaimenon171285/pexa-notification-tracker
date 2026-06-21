@@ -1152,7 +1152,6 @@ def _do_push_to_excel(ids, skip_complete=False):
                 errors.append(f"Matter {matter_num}: not found in any sheet")
 
         # Auto-mark successfully pushed tickets as complete (unless frontend already did it)
-        skip_complete = data.get("skip_complete", False)
         if not skip_complete:
             for nid in ids:
                 try:
@@ -1291,15 +1290,32 @@ def _col_letter(col_index):
 init_db()
 
 sync_interval = int(os.getenv("SYNC_INTERVAL_MINUTES", "5"))
+
+# TRACKER_ROLE controls which jobs this instance runs, so the same codebase can be
+# deployed as two separate Render services without conflicting:
+#   "all"           — everything (default; original single-service behaviour)
+#   "notifications" — PEXA notification reading + overdue task reminders only
+#   "workspaces"    — PE Portal workspace creation only
+TRACKER_ROLE = os.getenv("TRACKER_ROLE", "all").strip().lower()
+RUN_NOTIFICATIONS = TRACKER_ROLE in ("all", "notifications")
+RUN_WORKSPACES    = TRACKER_ROLE in ("all", "workspaces")
+print(f"TRACKER_ROLE={TRACKER_ROLE} | notifications={RUN_NOTIFICATIONS} | workspaces={RUN_WORKSPACES}")
+
 scheduler = BackgroundScheduler()
-scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
-scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")
-scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
+if RUN_NOTIFICATIONS:
+    scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
+    scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
+if RUN_WORKSPACES:
+    scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")
 scheduler.start()
 
-# Initial sync
-logger.info("Running initial email sync...")
-sync_emails()
+# Initial sync (on startup) — only for the jobs this instance is responsible for
+if RUN_NOTIFICATIONS:
+    logger.info("Running initial email sync...")
+    sync_emails()
+if RUN_WORKSPACES:
+    logger.info("Running initial workspace sync...")
+    sync_workspaces()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "5000"))
