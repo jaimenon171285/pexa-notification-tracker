@@ -11,7 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from database import init_db, get_notifications, get_notification, update_notification_status, \
     update_notification_assignment, add_note, get_stats, insert_notification, \
     update_emailed_info, get_overdue_emailed_tasks, mark_reminder_sent, \
-    get_all_reviewed_emailed_tasks, reset_reminder_sent
+    get_all_reviewed_emailed_tasks, reset_reminder_sent, get_auto_push_eligible
 from email_parser import parse_pexa_email
 from graph_client import GraphClient
 from workspace_creator import WorkspaceCreator
@@ -958,8 +958,11 @@ def _send_reminders_for_tasks(tasks):
 
 # --- Push to SharePoint Excel ---
 
-def _do_push_to_excel(ids, skip_complete=False):
-    """Core push logic — runs in a thread for background mode. Returns dict with results."""
+def _do_push_to_excel(ids, skip_complete=False, auto_push=False):
+    """Core push logic — runs in a thread for background mode. Returns dict with results.
+
+    When auto_push=True, the cell text is prefixed with '* ' so auto-pushed entries
+    can be visually distinguished from manually-pushed ones in the spreadsheet."""
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     if not sharepoint_url:
         return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
@@ -1009,6 +1012,9 @@ def _do_push_to_excel(ids, skip_complete=False):
                 note_text = f"{pexa_message} ({ntype} - {date_str})"
             else:
                 note_text = f"{ntype} - {date_str}"
+
+            if auto_push:
+                note_text = f"* {note_text}"
 
             # Search across weekly sheets for this matter number
             found = False
@@ -1284,6 +1290,167 @@ def _col_letter(col_index):
     return result
 
 
+# --- Auto-push: hourly job that pushes 'new' notifications to the spreadsheet,
+# gated by the end-date of the latest weekly tab (e.g. '6 July - 10 July' → 10 July).
+
+_MONTH_MAP = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+
+def _parse_tab_end_date(tab_name, ref_date=None):
+    """Parse the END date from a weekly tab name like '22 June - 26 June' or
+    '29 June - 3 July'. Returns a datetime at 23:59:59 Sydney time (inclusive
+    end-of-day). Year is inferred from ref_date — if the parsed date is more
+    than 6 months in the past, it's bumped a year forward to handle year-end
+    rollover. Returns None if the name doesn't match the expected pattern."""
+    import re as _re
+    if not tab_name:
+        return None
+    m = _re.search(r"(\d{1,2})\s+(\w+)\s*-\s*(\d{1,2})\s+(\w+)", tab_name.strip())
+    if not m:
+        return None
+    end_day_str, end_month_str = m.group(3), m.group(4)
+    month = _MONTH_MAP.get(end_month_str.lower())
+    if not month:
+        return None
+    try:
+        day = int(end_day_str)
+    except ValueError:
+        return None
+    ref = ref_date or _now_sydney()
+    year = ref.year
+    try:
+        candidate = datetime(year, month, day, 23, 59, 59, tzinfo=SYDNEY_TZ)
+    except ValueError:
+        return None
+    if (ref - candidate).days > 180:
+        try:
+            candidate = datetime(year + 1, month, day, 23, 59, 59, tzinfo=SYDNEY_TZ)
+        except ValueError:
+            return None
+    elif (candidate - ref).days > 180:
+        try:
+            candidate = datetime(year - 1, month, day, 23, 59, 59, tzinfo=SYDNEY_TZ)
+        except ValueError:
+            return None
+    return candidate
+
+
+_PUSH_SKIP_SHEETS = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
+
+
+def _compute_push_max_date(sheets):
+    """Given a list of worksheet names, return the latest weekly-tab end date,
+    or None if no parseable weekly tab is found. Excludes admin/reference and
+    PEXA CHECK tabs (same skip rules as _do_push_to_excel)."""
+    max_date = None
+    max_tab = None
+    ref = _now_sydney()
+    for sheet in sheets:
+        s_lower = sheet.lower().strip()
+        if s_lower in _PUSH_SKIP_SHEETS:
+            continue
+        if "pexa check" in s_lower:
+            continue
+        end = _parse_tab_end_date(sheet, ref_date=ref)
+        if end is None:
+            continue
+        if max_date is None or end > max_date:
+            max_date = end
+            max_tab = sheet
+    if max_date:
+        logger.info(f"Auto-push cap: {max_date.strftime('%d/%m/%Y')} (from tab '{max_tab}')")
+    return max_date
+
+
+def _parse_settlement_date(s):
+    """Parse a settlement date string like '14/04/2026 02:30 PM AEST' or
+    '14/04/2026'. Returns a datetime in Sydney TZ, or None."""
+    import re as _re
+    if not s:
+        return None
+    m = _re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(s).strip())
+    if not m:
+        return None
+    try:
+        return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), tzinfo=SYDNEY_TZ)
+    except ValueError:
+        return None
+
+
+def auto_push_notifications():
+    """Hourly: push 'new' notifications to the spreadsheet, gated by the cap
+    derived from the latest weekly tab name. Notifications without a parseable
+    settlement date are pushed regardless (no future-date risk). Successfully
+    pushed notifications get auto-marked 'actioned' by the existing push logic;
+    those whose matter isn't found in any tab stay 'new' and retry next hour."""
+    if not os.getenv("SHAREPOINT_EXCEL_URL"):
+        logger.warning("Auto-push: SHAREPOINT_EXCEL_URL not configured, skipping")
+        return
+
+    try:
+        eligible = get_auto_push_eligible()
+        if not eligible:
+            logger.info("Auto-push: no 'new' notifications to push")
+            return
+
+        logger.info(f"Auto-push: {len(eligible)} 'new' notification(s) — computing cap from spreadsheet tabs")
+
+        try:
+            drive_id, item_id = graph_client.resolve_sharing_url(os.getenv("SHAREPOINT_EXCEL_URL"))
+            sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        except Exception as e:
+            logger.error(f"Auto-push: could not resolve sheets ({e}); skipping run")
+            return
+
+        max_date = _compute_push_max_date(sheets)
+        if max_date is None:
+            logger.warning("Auto-push: no parseable weekly tab end date, skipping run")
+            return
+
+        push_ids = []
+        skipped = 0
+        for n in eligible:
+            sd = _parse_settlement_date(n.get("settlement_date"))
+            if sd is None or sd <= max_date:
+                push_ids.append(n["id"])
+            else:
+                skipped += 1
+
+        logger.info(
+            f"Auto-push: cap={max_date.strftime('%d/%m/%Y')}; "
+            f"pushing {len(push_ids)} of {len(eligible)} eligible "
+            f"({skipped} skipped — settlement beyond cap)"
+        )
+
+        if not push_ids:
+            return
+
+        result = _do_push_to_excel(push_ids, auto_push=True)
+        logger.info(f"Auto-push complete: {result.get('message', 'done')}")
+
+    except Exception as e:
+        logger.error(f"Auto-push job failed: {e}", exc_info=True)
+
+
+@app.route("/api/auto-push", methods=["POST"])
+def api_auto_push():
+    """Manually trigger the hourly auto-push job (runs in background thread
+    so the HTTP response returns immediately)."""
+    import threading
+    def _bg():
+        try:
+            auto_push_notifications()
+        except Exception as e:
+            logger.error(f"Manual auto-push trigger failed: {e}", exc_info=True)
+    threading.Thread(target=_bg, daemon=True).start()
+    return jsonify({"success": True, "message": "Auto-push triggered in background — see server logs for results"})
+
+
 # --- Startup ---
 
 # Always init the database and scheduler (works for both gunicorn and flask dev)
@@ -1305,6 +1472,7 @@ scheduler = BackgroundScheduler()
 if RUN_NOTIFICATIONS:
     scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
     scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
+    scheduler.add_job(auto_push_notifications, "interval", hours=1, id="auto_push")
 if RUN_WORKSPACES:
     scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")
 scheduler.start()

@@ -406,6 +406,23 @@ def get_all_unremindered_emailed_tasks():
     return rows
 
 
+def get_auto_push_eligible():
+    """Return all 'new' notifications, oldest first.
+    Used by the hourly auto-push job; further filtering (by settlement-date
+    cap) happens in app.py."""
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT * FROM notifications
+        WHERE status = 'new'
+        ORDER BY received_at ASC
+    """)
+    rows = _fetchall(cur)
+    cur.close()
+    conn.close()
+    return rows
+
+
 def reset_reminder_sent(notification_id):
     """Reset reminder_sent to 0 so a reminder can be sent again."""
     conn = get_db()
