@@ -1187,6 +1187,105 @@ def _do_push_to_excel(ids, skip_complete=False, auto_push=False):
         return {"success": False, "error": str(e)}
 
 
+# --- Adjustment notes from Apollo (the PE Portal) -------------------------------
+# Apollo posts here after it serves the draft adjustment sheet on the other side, so
+# the shared settlements spreadsheet shows it next to the matter without anyone
+# re-keying it. Deliberately a DEDICATED column (D) — the PEXA Notes column above is
+# owned by the notification push and the two must not fight over one cell.
+ADJ_COL_LETTER = "D"
+ADJ_COL = 3          # 0-based index of column D
+
+
+def _push_adjustment_note(matter_number, note_text):
+    """Write note_text into column D of every weekly tab row for this matter.
+    Prepends to whatever is already there, so history is never lost."""
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
+
+    matter_num = str(matter_number or "").strip()
+    note_text = str(note_text or "").strip()
+    if not matter_num:
+        return {"success": False, "error": "matterNumber is required"}
+    if not note_text:
+        return {"success": False, "error": "note is required"}
+
+    import re
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
+                       "import", "ttb (2)", "invoices"}
+        updated, errors = [], []
+
+        for sheet in sheets:
+            if sheet.lower().strip() in skip_sheets:
+                continue
+            if "pexa check" in sheet.lower():
+                continue
+            try:
+                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                if not values or len(values) < 2:
+                    continue
+
+                range_start_row = 1
+                if address and "!" in address:
+                    m = re.match(r"[A-Z]+(\d+)", address.split("!")[1])
+                    if m:
+                        range_start_row = int(m.group(1))
+
+                for ri in range(len(values)):
+                    cell_val = str(values[ri][0] or "").strip()
+                    if not cell_val or not cell_val.startswith(matter_num):
+                        continue
+                    # "75017" must not match "750171" — the next char has to be a
+                    # separator, not another digit.
+                    tail = cell_val[len(matter_num):len(matter_num) + 1]
+                    if tail.isdigit():
+                        continue
+
+                    excel_row = range_start_row + ri
+                    target_cell = f"{ADJ_COL_LETTER}{excel_row}"
+
+                    existing = ""
+                    if ADJ_COL < len(values[ri]):
+                        existing = str(values[ri][ADJ_COL] or "").strip()
+                    new_value = f"{note_text}\n{existing}" if existing else note_text
+
+                    graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell, new_value)
+                    updated.append(f"{sheet}!{target_cell}")
+                    logger.info(f"Adj note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
+            except Exception as sheet_err:
+                errors.append(f"{sheet}: {sheet_err}")
+
+        return {
+            "success": bool(updated),
+            "matter": matter_num,
+            "note": note_text,
+            "updated": updated,
+            "errors": errors,
+            "error": None if updated else "matter not found on any weekly tab",
+        }
+    except Exception as e:
+        logger.error(f"Adj note push failed: {e}", exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@app.route("/api/adj-note", methods=["POST"])
+def api_adj_note():
+    """POST {matterNumber, note[, token]} — called by Apollo when adjustments are
+    served on the other side. If APOLLO_NOTE_TOKEN is set in the environment a
+    matching token is required; if it isn't set the endpoint is open, matching the
+    rest of this app's API (recommend setting it)."""
+    data = request.get_json(silent=True) or {}
+    required = os.getenv("APOLLO_NOTE_TOKEN", "")
+    if required and str(data.get("token", "")) != required:
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+
+    result = _push_adjustment_note(data.get("matterNumber"), data.get("note"))
+    return jsonify(result), (200 if result.get("success") else 404 if result.get("error") == "matter not found on any weekly tab" else 500)
+
+
 @app.route("/api/push-to-excel", methods=["POST"])
 def api_push_to_excel():
     """Push selected notifications to the shared SharePoint Excel spreadsheet.
