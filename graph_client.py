@@ -389,6 +389,14 @@ class GraphClient:
 
         return response.json()
 
+    def get_excel_cell_fill(self, drive_id, item_id, sheet_name, cell_addr):
+        """Read a cell's background colour, e.g. "#ADD8E6". Diagnostic use."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/"
+               f"{safe_sheet}/range(address='{cell_addr}')/format/fill")
+        return self._request("GET", url).get("color")
+
     def insert_excel_column(self, drive_id, item_id, sheet_name, col_letter):
         """Insert a new column at the given column letter, shifting existing columns right."""
         import urllib.parse

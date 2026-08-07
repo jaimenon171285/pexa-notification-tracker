@@ -1326,10 +1326,17 @@ def api_adj_note_peek():
                         continue
                     if cell_val[len(matter_num):len(matter_num) + 1].isdigit():
                         continue
+                    cell_addr = f"{ADJ_COL_LETTER}{range_start_row + ri}"
+                    fill = None
+                    try:
+                        fill = graph_client.get_excel_cell_fill(drive_id, item_id, sheet, cell_addr)
+                    except Exception:
+                        pass
                     rows.append({
-                        "cell": f"{sheet}!{ADJ_COL_LETTER}{range_start_row + ri}",
+                        "cell": f"{sheet}!{cell_addr}",
                         "colA": cell_val,
                         "colD": str(values[ri][ADJ_COL] or "") if ADJ_COL < len(values[ri]) else "",
+                        "fill": fill,
                     })
             except Exception as sheet_err:
                 logger.warning(f"Adj peek {sheet}: {sheet_err}")
