@@ -1193,14 +1193,21 @@ def _do_push_to_excel(ids, skip_complete=False, auto_push=False):
 # re-keying it. Deliberately a DEDICATED column (D) — the PEXA Notes column above is
 # owned by the notification push and the two must not fight over one cell.
 ADJ_COL_LETTER = "D"
-ADJ_FILL = "#ADD8E6"  # light blue — makes Apollo-written notes obvious at a glance
 
 # Apollo may only write to columns it owns. Anything else is rejected, so a typo
 # or a bad payload can never scribble over the lookup-formula columns
 # (B, C, G, K, L, O, P, Q) or the PEXA Notes column (H).
 #   D — adjustments served on the other side
 #   I — FSO / breakdown of settlement sent to the client
-APOLLO_COLS = {"D", "I"}
+# The fill is per-column, because the two columns mean different things:
+#   D had no colour convention, so light blue flags "Apollo wrote this".
+#   I is ALREADY colour-coded by the team — green where the FSO has gone out,
+#     purple where it hasn't — so Apollo uses the same green a person would,
+#     and the cell flips from outstanding to done exactly as if typed by hand.
+APOLLO_COLS = {
+    "D": "#ADD8E6",   # light blue
+    "I": "#C6EFCE",   # the team's existing "FSO sent" green
+}
 
 
 def _col_index(col_letter):
@@ -1227,6 +1234,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
                 "error": f"column {col_letter} is not writable by Apollo "
                          f"(allowed: {', '.join(sorted(APOLLO_COLS))})"}
     col_idx = _col_index(col_letter)
+    fill = APOLLO_COLS[col_letter]
 
     import re
     try:
@@ -1271,7 +1279,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
                     new_value = f"{note_text}\n{existing}" if existing else note_text
 
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
-                                                   new_value, fill=ADJ_FILL)
+                                                   new_value, fill=fill)
                     updated.append(f"{sheet}!{target_cell}")
                     logger.info(f"Apollo note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:
