@@ -1193,23 +1193,40 @@ def _do_push_to_excel(ids, skip_complete=False, auto_push=False):
 # re-keying it. Deliberately a DEDICATED column (D) — the PEXA Notes column above is
 # owned by the notification push and the two must not fight over one cell.
 ADJ_COL_LETTER = "D"
-ADJ_COL = 3          # 0-based index of column D
 ADJ_FILL = "#ADD8E6"  # light blue — makes Apollo-written notes obvious at a glance
 
+# Apollo may only write to columns it owns. Anything else is rejected, so a typo
+# or a bad payload can never scribble over the lookup-formula columns
+# (B, C, G, K, L, O, P, Q) or the PEXA Notes column (H).
+#   D — adjustments served on the other side
+#   I — FSO / breakdown of settlement sent to the client
+APOLLO_COLS = {"D", "I"}
 
-def _push_adjustment_note(matter_number, note_text):
-    """Write note_text into column D of every weekly tab row for this matter.
-    Prepends to whatever is already there, so history is never lost."""
+
+def _col_index(col_letter):
+    """0-based index for a single-letter column, e.g. "D" -> 3."""
+    return ord(col_letter.upper()) - ord("A")
+
+
+def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
+    """Write note_text into the given column of every weekly tab row for this
+    matter. Prepends to whatever is already there, so history is never lost."""
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     if not sharepoint_url:
         return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
 
     matter_num = str(matter_number or "").strip()
     note_text = str(note_text or "").strip()
+    col_letter = str(col_letter or ADJ_COL_LETTER).strip().upper()
     if not matter_num:
         return {"success": False, "error": "matterNumber is required"}
     if not note_text:
         return {"success": False, "error": "note is required"}
+    if col_letter not in APOLLO_COLS:
+        return {"success": False,
+                "error": f"column {col_letter} is not writable by Apollo "
+                         f"(allowed: {', '.join(sorted(APOLLO_COLS))})"}
+    col_idx = _col_index(col_letter)
 
     import re
     try:
@@ -1246,57 +1263,74 @@ def _push_adjustment_note(matter_number, note_text):
                         continue
 
                     excel_row = range_start_row + ri
-                    target_cell = f"{ADJ_COL_LETTER}{excel_row}"
+                    target_cell = f"{col_letter}{excel_row}"
 
                     existing = ""
-                    if ADJ_COL < len(values[ri]):
-                        existing = str(values[ri][ADJ_COL] or "").strip()
+                    if col_idx < len(values[ri]):
+                        existing = str(values[ri][col_idx] or "").strip()
                     new_value = f"{note_text}\n{existing}" if existing else note_text
 
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
                                                    new_value, fill=ADJ_FILL)
                     updated.append(f"{sheet}!{target_cell}")
-                    logger.info(f"Adj note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
+                    logger.info(f"Apollo note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:
                 errors.append(f"{sheet}: {sheet_err}")
 
         return {
             "success": bool(updated),
             "matter": matter_num,
+            "column": col_letter,
             "note": note_text,
             "updated": updated,
             "errors": errors,
             "error": None if updated else "matter not found on any weekly tab",
         }
     except Exception as e:
-        logger.error(f"Adj note push failed: {e}", exc_info=True)
+        logger.error(f"Apollo note push failed: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
 
 
 @app.route("/api/adj-note", methods=["POST"])
 def api_adj_note():
-    """POST {matterNumber, note[, token]} — called by Apollo when adjustments are
-    served on the other side. If APOLLO_NOTE_TOKEN is set in the environment a
-    matching token is required; if it isn't set the endpoint is open, matching the
-    rest of this app's API (recommend setting it)."""
+    """POST {matterNumber, note[, column][, token]} — called by Apollo when it does
+    something worth recording next to the matter on the weekly tab: adjustments
+    served on the other side (column D, the default) or the FSO sent to the client
+    (column I). If APOLLO_NOTE_TOKEN is set in the environment a matching token is
+    required; if it isn't set the endpoint is open, matching the rest of this app's
+    API (recommend setting it)."""
     data = request.get_json(silent=True) or {}
     required = os.getenv("APOLLO_NOTE_TOKEN", "")
     if required and str(data.get("token", "")) != required:
         return jsonify({"success": False, "error": "unauthorized"}), 401
 
-    result = _push_adjustment_note(data.get("matterNumber"), data.get("note"))
-    return jsonify(result), (200 if result.get("success") else 404 if result.get("error") == "matter not found on any weekly tab" else 500)
+    result = _push_sheet_note(data.get("matterNumber"), data.get("note"),
+                             data.get("column") or ADJ_COL_LETTER)
+    if result.get("success"):
+        return jsonify(result), 200
+    err = result.get("error") or ""
+    if err == "matter not found on any weekly tab":
+        return jsonify(result), 404
+    if "is not writable by Apollo" in err or "required" in err:
+        return jsonify(result), 400
+    return jsonify(result), 500
 
 
 @app.route("/api/adj-note/peek", methods=["GET"])
 def api_adj_note_peek():
-    """GET ?matter=74254 — read back column A and column D for that matter on every
-    weekly tab. Diagnostic only: lets us confirm a note actually landed (and is
-    still there) without opening the workbook."""
+    """GET ?matter=74254[&column=I] — read back column A and the target column for
+    that matter on every weekly tab, with the cell's fill colour. Diagnostic only:
+    lets us confirm a note actually landed (and is still there), and lets us look at
+    a column BEFORE wiring Apollo to write to it. Read-only, so any column is fair
+    game here — the write allow-list is what protects the sheet."""
     import re
     matter_num = str(request.args.get("matter", "")).strip()
+    col_letter = str(request.args.get("column", ADJ_COL_LETTER)).strip().upper()
     if not matter_num:
         return jsonify({"success": False, "error": "matter is required"}), 400
+    if not re.fullmatch(r"[A-Z]", col_letter):
+        return jsonify({"success": False, "error": "column must be a single letter A-Z"}), 400
+    col_idx = _col_index(col_letter)
 
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     if not sharepoint_url:
@@ -1326,7 +1360,7 @@ def api_adj_note_peek():
                         continue
                     if cell_val[len(matter_num):len(matter_num) + 1].isdigit():
                         continue
-                    cell_addr = f"{ADJ_COL_LETTER}{range_start_row + ri}"
+                    cell_addr = f"{col_letter}{range_start_row + ri}"
                     fill = None
                     try:
                         fill = graph_client.get_excel_cell_fill(drive_id, item_id, sheet, cell_addr)
@@ -1335,12 +1369,12 @@ def api_adj_note_peek():
                     rows.append({
                         "cell": f"{sheet}!{cell_addr}",
                         "colA": cell_val,
-                        "colD": str(values[ri][ADJ_COL] or "") if ADJ_COL < len(values[ri]) else "",
+                        "value": str(values[ri][col_idx] or "") if col_idx < len(values[ri]) else "",
                         "fill": fill,
                     })
             except Exception as sheet_err:
                 logger.warning(f"Adj peek {sheet}: {sheet_err}")
-        return jsonify({"success": True, "matter": matter_num, "rows": rows})
+        return jsonify({"success": True, "matter": matter_num, "column": col_letter, "rows": rows})
     except Exception as e:
         logger.error(f"Adj peek failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
