@@ -359,8 +359,9 @@ class GraphClient:
         data = self._request("GET", url, params={"$select": "values,address"})
         return data.get("values", []), data.get("address", "")
 
-    def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value):
-        """Write a value to a specific cell in a worksheet, with no text wrapping."""
+    def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value, fill=None):
+        """Write a value to a specific cell in a worksheet, with no text wrapping.
+        Pass fill="#RRGGBB" to also shade the cell (used to mark Apollo's notes)."""
         import urllib.parse
         safe_sheet = urllib.parse.quote(sheet_name, safe="")
         url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')"
@@ -371,13 +372,20 @@ class GraphClient:
             response = requests.patch(url, headers=self._headers(), json=payload)
         response.raise_for_status()
 
-        # Disable text wrapping only — don't touch cell colours
+        # Disable text wrapping only — don't touch cell colours unless asked to
         try:
             fmt_url = f"{url}/format"
             fmt_payload = {"wrapText": False}
             requests.patch(fmt_url, headers=self._headers(), json=fmt_payload)
         except Exception:
             pass  # Non-critical
+
+        if fill:
+            try:
+                requests.patch(f"{url}/format/fill", headers=self._headers(),
+                               json={"color": fill})
+            except Exception:
+                pass  # Non-critical — the note itself already landed
 
         return response.json()
 

@@ -1194,6 +1194,7 @@ def _do_push_to_excel(ids, skip_complete=False, auto_push=False):
 # owned by the notification push and the two must not fight over one cell.
 ADJ_COL_LETTER = "D"
 ADJ_COL = 3          # 0-based index of column D
+ADJ_FILL = "#ADD8E6"  # light blue — makes Apollo-written notes obvious at a glance
 
 
 def _push_adjustment_note(matter_number, note_text):
@@ -1252,7 +1253,8 @@ def _push_adjustment_note(matter_number, note_text):
                         existing = str(values[ri][ADJ_COL] or "").strip()
                     new_value = f"{note_text}\n{existing}" if existing else note_text
 
-                    graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell, new_value)
+                    graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
+                                                   new_value, fill=ADJ_FILL)
                     updated.append(f"{sheet}!{target_cell}")
                     logger.info(f"Adj note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:
@@ -1284,6 +1286,57 @@ def api_adj_note():
 
     result = _push_adjustment_note(data.get("matterNumber"), data.get("note"))
     return jsonify(result), (200 if result.get("success") else 404 if result.get("error") == "matter not found on any weekly tab" else 500)
+
+
+@app.route("/api/adj-note/peek", methods=["GET"])
+def api_adj_note_peek():
+    """GET ?matter=74254 — read back column A and column D for that matter on every
+    weekly tab. Diagnostic only: lets us confirm a note actually landed (and is
+    still there) without opening the workbook."""
+    import re
+    matter_num = str(request.args.get("matter", "")).strip()
+    if not matter_num:
+        return jsonify({"success": False, "error": "matter is required"}), 400
+
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 500
+
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
+                       "import", "ttb (2)", "invoices"}
+        rows = []
+        for sheet in sheets:
+            if sheet.lower().strip() in skip_sheets or "pexa check" in sheet.lower():
+                continue
+            try:
+                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                if not values:
+                    continue
+                range_start_row = 1
+                if address and "!" in address:
+                    m = re.match(r"[A-Z]+(\d+)", address.split("!")[1])
+                    if m:
+                        range_start_row = int(m.group(1))
+                for ri in range(len(values)):
+                    cell_val = str(values[ri][0] or "").strip()
+                    if not cell_val or not cell_val.startswith(matter_num):
+                        continue
+                    if cell_val[len(matter_num):len(matter_num) + 1].isdigit():
+                        continue
+                    rows.append({
+                        "cell": f"{sheet}!{ADJ_COL_LETTER}{range_start_row + ri}",
+                        "colA": cell_val,
+                        "colD": str(values[ri][ADJ_COL] or "") if ADJ_COL < len(values[ri]) else "",
+                    })
+            except Exception as sheet_err:
+                logger.warning(f"Adj peek {sheet}: {sheet_err}")
+        return jsonify({"success": True, "matter": matter_num, "rows": rows})
+    except Exception as e:
+        logger.error(f"Adj peek failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
 
 
 @app.route("/api/push-to-excel", methods=["POST"])
