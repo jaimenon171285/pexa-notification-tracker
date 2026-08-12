@@ -384,10 +384,26 @@ class GraphClient:
             try:
                 requests.patch(f"{url}/format/fill", headers=self._headers(),
                                json={"color": fill})
+                # Force the font to black as well. Writing a value does NOT reset the
+                # font colour, so a cell that previously held white text on a dark
+                # fill kept the white font — our note landed on a light blue fill and
+                # was invisible, and staff were recolouring each one by hand
+                # (Sheriff 2026-08-12). Only done when we set the fill, so cells we
+                # aren't styling keep whatever the team chose.
+                requests.patch(f"{url}/format/font", headers=self._headers(),
+                               json={"color": "#000000"})
             except Exception:
                 pass  # Non-critical — the note itself already landed
 
         return response.json()
+
+    def get_excel_cell_font_color(self, drive_id, item_id, sheet_name, cell_addr):
+        """Read a cell's font colour, e.g. "#000000". Diagnostic use."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/"
+               f"{safe_sheet}/range(address='{cell_addr}')/format/font")
+        return self._request("GET", url).get("color")
 
     def get_excel_cell_fill(self, drive_id, item_id, sheet_name, cell_addr):
         """Read a cell's background colour, e.g. "#ADD8E6". Diagnostic use."""

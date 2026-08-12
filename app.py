@@ -1369,9 +1369,10 @@ def api_adj_note_peek():
                     if cell_val[len(matter_num):len(matter_num) + 1].isdigit():
                         continue
                     cell_addr = f"{col_letter}{range_start_row + ri}"
-                    fill = None
+                    fill = font = None
                     try:
                         fill = graph_client.get_excel_cell_fill(drive_id, item_id, sheet, cell_addr)
+                        font = graph_client.get_excel_cell_font_color(drive_id, item_id, sheet, cell_addr)
                     except Exception:
                         pass
                     rows.append({
@@ -1379,6 +1380,7 @@ def api_adj_note_peek():
                         "colA": cell_val,
                         "value": str(values[ri][col_idx] or "") if col_idx < len(values[ri]) else "",
                         "fill": fill,
+                        "font": font,
                     })
             except Exception as sheet_err:
                 logger.warning(f"Adj peek {sheet}: {sheet_err}")
