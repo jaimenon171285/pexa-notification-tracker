@@ -13,6 +13,43 @@ from database import init_db, get_notifications, get_notification, update_notifi
     update_emailed_info, get_overdue_emailed_tasks, mark_reminder_sent, \
     get_all_reviewed_emailed_tasks, reset_reminder_sent, get_auto_push_eligible
 from email_parser import parse_pexa_email
+import requests
+
+# ── Push each notification to Apollo ─────────────────────────────────────────
+#
+# Apollo shows PEXA conversations on the matter itself, so you can see what the
+# other side said without leaving it. We PUSH rather than let Apollo pull from
+# /api/notifications: this service sleeps and restarts, and a conversation feed
+# that is sometimes empty is worse than one that never claimed to be complete.
+#
+# Best effort by design. A failed push must never lose the notification or break
+# the sync — the row is already in our own database, and the backfill endpoint
+# below can replay anything Apollo missed.
+APOLLO_INGEST_URL = os.getenv(
+    "APOLLO_INGEST_URL",
+    "https://australia-southeast1-post-exchange-lw-platform.cloudfunctions.net/ingestPexaNotification")
+APOLLO_INGEST_TOKEN = os.getenv("APOLLO_INGEST_TOKEN", "")
+
+
+def push_to_apollo(parsed):
+    """Send one parsed notification to Apollo. Returns a short status string."""
+    if not APOLLO_INGEST_TOKEN:
+        return "no token"
+    try:
+        r = requests.post(
+            APOLLO_INGEST_URL,
+            params={"token": APOLLO_INGEST_TOKEN},
+            json=parsed,
+            timeout=20,
+        )
+        if r.status_code != 200:
+            logger.warning("Apollo push HTTP %s for %s", r.status_code, parsed.get("matter_number"))
+            return f"http {r.status_code}"
+        return (r.json() or {}).get("status", "ok")
+    except Exception as e:
+        logger.warning("Apollo push failed for %s: %s", parsed.get("matter_number"), e)
+        return "error"
+
 from graph_client import GraphClient
 from workspace_creator import WorkspaceCreator
 
@@ -66,6 +103,10 @@ def sync_emails():
             was_new = insert_notification(parsed)
             if was_new:
                 new_count += 1
+                # Onto the matter in Apollo. Only for genuinely new ones —
+                # re-pushing a duplicate would be harmless (Apollo keys on the
+                # email id) but pointless.
+                push_to_apollo(parsed)
 
             # Move all processed emails (new or duplicate) to archive folder
             # This keeps the PEXA folder clean and prevents re-processing
@@ -1297,6 +1338,52 @@ def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
     except Exception as e:
         logger.error(f"Apollo note push failed: {e}", exc_info=True)
         return {"success": False, "error": str(e)}
+
+
+@app.route("/api/apollo-backfill", methods=["POST"])
+def api_apollo_backfill():
+    """POST [?limit=N][&matter=74806] — replay stored notifications into Apollo.
+
+    New notifications are pushed as they arrive; this is for the history that
+    was already in the database when the push was added, and for replaying
+    anything a Render restart dropped mid-flight. Safe to run repeatedly:
+    Apollo keys each one on its PEXA email id, so a second run updates rather
+    than duplicates."""
+    if not APOLLO_INGEST_TOKEN:
+        return jsonify({"success": False, "error": "APOLLO_INGEST_TOKEN not set"}), 400
+
+    filters = {}
+    if request.args.get("matter"):
+        filters["matter_number"] = request.args.get("matter")
+    rows = get_notifications(filters or None)
+    try:
+        limit = int(request.args.get("limit", "0"))
+    except ValueError:
+        limit = 0
+    if limit > 0:
+        rows = rows[:limit]
+
+    counts = {}
+    for row in rows:
+        d = dict(row)
+        status = push_to_apollo({
+            "email_id":          d.get("email_id"),
+            "received_at":       str(d.get("received_at") or ""),
+            "subject":           d.get("subject"),
+            "matter_number":     d.get("matter_number"),
+            "settlement_date":   str(d.get("settlement_date") or ""),
+            "workspace_number":  d.get("workspace_number"),
+            "workspace_status":  d.get("workspace_status"),
+            "notification_type": d.get("notification_type"),
+            "summary":           d.get("summary"),
+            "sender":            d.get("sender"),
+            "category":          d.get("category"),
+            "message_from":      d.get("message_from"),
+        })
+        counts[status] = counts.get(status, 0) + 1
+
+    logger.info("Apollo backfill: %s", counts)
+    return jsonify({"success": True, "considered": len(rows), "results": counts})
 
 
 @app.route("/api/adj-note", methods=["POST"])
