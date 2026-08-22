@@ -1365,11 +1365,20 @@ def api_apollo_backfill():
         limit = int(request.args.get("limit", "200"))
     except ValueError:
         limit = 200
-    filters = {"limit": max(1, min(limit, 1000))}
+    # 50 takes about 16 seconds; 100 does not come back. Each notification is a
+    # separate HTTPS round trip to Apollo, and this instance is already unhealthy
+    # (see the hourly out-of-memory events). Capped so a well-meant ?limit=1000
+    # cannot take the service down.
+    filters = {"limit": max(1, min(limit, 50))}
     if request.args.get("matter"):
         filters["matter_number"] = request.args.get("matter")
+    # Walk backwards a batch at a time: the response returns `oldest`, which you
+    # pass as the next call's date_to. Without it, repeated calls re-push the
+    # same newest 50 for ever.
     if request.args.get("date_from"):
         filters["date_from"] = request.args.get("date_from")
+    if request.args.get("date_to"):
+        filters["date_to"] = request.args.get("date_to")
     rows = get_notifications(filters)
 
     counts = {}
@@ -1391,8 +1400,18 @@ def api_apollo_backfill():
         })
         counts[status] = counts.get(status, 0) + 1
 
-    logger.info("Apollo backfill: %s", counts)
-    return jsonify({"success": True, "considered": len(rows), "results": counts})
+    oldest = None
+    if rows:
+        oldest = str(dict(rows[-1]).get("received_at") or "") or None
+
+    logger.info("Apollo backfill: %s (oldest %s)", counts, oldest)
+    return jsonify({
+        "success": True,
+        "considered": len(rows),
+        "results": counts,
+        # Feed this back as ?date_to= to get the next batch further back.
+        "oldest": oldest,
+    })
 
 
 @app.route("/api/adj-note", methods=["POST"])
