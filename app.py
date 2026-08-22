@@ -1356,16 +1356,21 @@ def api_apollo_backfill():
     if not APOLLO_INGEST_TOKEN:
         return jsonify({"success": False, "error": "APOLLO_INGEST_TOKEN not set"}), 400
 
-    filters = {}
+    # The limit goes into the SQL, not a slice afterwards. There are ~18,000
+    # notifications; loading them all to keep the newest 300 is what took this
+    # 512MB instance down the first time it was tried. Default to a sane batch
+    # rather than "everything" for the same reason — run it repeatedly, or pass
+    # a date_from, to walk further back.
+    try:
+        limit = int(request.args.get("limit", "200"))
+    except ValueError:
+        limit = 200
+    filters = {"limit": max(1, min(limit, 1000))}
     if request.args.get("matter"):
         filters["matter_number"] = request.args.get("matter")
-    rows = get_notifications(filters or None)
-    try:
-        limit = int(request.args.get("limit", "0"))
-    except ValueError:
-        limit = 0
-    if limit > 0:
-        rows = rows[:limit]
+    if request.args.get("date_from"):
+        filters["date_from"] = request.args.get("date_from")
+    rows = get_notifications(filters)
 
     counts = {}
     for row in rows:
