@@ -28,7 +28,11 @@ import requests
 APOLLO_INGEST_URL = os.getenv(
     "APOLLO_INGEST_URL",
     "https://australia-southeast1-post-exchange-lw-platform.cloudfunctions.net/ingestPexaNotification")
-APOLLO_INGEST_TOKEN = os.getenv("APOLLO_INGEST_TOKEN", "")
+# Falls back to FIREBASE_WORKSPACE_TOKEN, which is already set here and is the
+# same shared secret the ingest endpoint checks — the one this service already
+# uses to call createWorkspaceFromEmail. One secret, already configured, rather
+# than a second copy of it that can drift.
+APOLLO_INGEST_TOKEN = os.getenv("APOLLO_INGEST_TOKEN", "") or os.getenv("FIREBASE_WORKSPACE_TOKEN", "")
 
 
 def push_to_apollo(parsed):
