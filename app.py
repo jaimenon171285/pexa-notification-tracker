@@ -1809,7 +1809,25 @@ scheduler = BackgroundScheduler()
 if RUN_NOTIFICATIONS:
     scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
     scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
-    scheduler.add_job(auto_push_notifications, "interval", hours=1, id="auto_push")
+    # auto_push_notifications is NOT scheduled any more (Jai, 2026-08-23).
+    #
+    # It pushed PEXA notifications into the shared spreadsheet's PEXA Notes
+    # column hourly. Nobody was reading that column, and the notifications now
+    # live on the matter in Apollo, so the job was doing expensive work for no
+    # reader — Jai is deleting the column.
+    #
+    # It is also what has been taking this service down every hour. To find the
+    # matter's row it loaded every weekly tab of the workbook into a cache that
+    # was never freed, so one run held the whole workbook in memory. That was a
+    # reasonable trade in June 2026 when the sheet had ten tabs (see "Cache
+    # sheet contents for ~10x speedup"); the workbook has gained a tab a week
+    # since, and the instance has 512MB.
+    #
+    # The function and /api/auto-push are deliberately left in place, so this is
+    # one line to reverse if the spreadsheet is ever wanted again. If it is,
+    # invert the loops first — iterate sheets on the outside and notifications
+    # within, so only one tab is in memory at a time.
+    # scheduler.add_job(auto_push_notifications, "interval", hours=1, id="auto_push")
 if RUN_WORKSPACES:
     scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")
 scheduler.start()
