@@ -39,11 +39,29 @@ def push_to_apollo(parsed):
     """Send one parsed notification to Apollo. Returns a short status string."""
     if not APOLLO_INGEST_TOKEN:
         return "no token"
+    # The stored `summary` for a conversation is only "You have a new message
+    # from X" — it says that somebody spoke, not what they said. The real line
+    # ("List of requirements to achieve on time settlement") is in the body, and
+    # _extract_pexa_message is what pulls it out for the spreadsheet. Apollo gets
+    # the same thing, or the feed is strictly worse than the sheet it replaces.
+    body = dict(parsed)
+    try:
+        body["message"] = _extract_pexa_message(
+            body.get("full_body", "") or "",
+            notification_type=body.get("notification_type", "") or "",
+            subject=body.get("subject", "") or "",
+        )
+    except Exception as e:
+        logger.warning("Apollo push: could not extract message: %s", e)
+        body["message"] = ""
+    # full_body is up to 5000 characters and Apollo does not store it — sending
+    # it would be a wasted payload on every notification.
+    body.pop("full_body", None)
     try:
         r = requests.post(
             APOLLO_INGEST_URL,
             params={"token": APOLLO_INGEST_TOKEN},
-            json=parsed,
+            json=body,
             timeout=20,
         )
         if r.status_code != 200:
@@ -1394,6 +1412,7 @@ def api_apollo_backfill():
             "workspace_status":  d.get("workspace_status"),
             "notification_type": d.get("notification_type"),
             "summary":           d.get("summary"),
+            "full_body":         d.get("full_body"),
             "sender":            d.get("sender"),
             "category":          d.get("category"),
             "message_from":      d.get("message_from"),
