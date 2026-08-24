@@ -1267,9 +1267,15 @@ ADJ_COL_LETTER = "D"
 #   I is ALREADY colour-coded by the team — green where the FSO has gone out,
 #     purple where it hasn't — so Apollo uses the same green a person would,
 #     and the cell flips from outstanding to done exactly as if typed by hand.
+# Keyed by column LETTER, which is positional — deleting a column to the left of
+# one of these silently retargets Apollo at whatever moved into the slot. That is
+# what happened on 2026-08-23: the PEXA Notes column (G) was removed, everything
+# right of it shifted one left, and FSO notes addressed to I started landing in
+# Sign off, a column the team writes by hand. Both entries must match the letters
+# in Apollo's sheetNotes.js.
 APOLLO_COLS = {
-    "D": "#ADD8E6",   # light blue
-    "I": "#C6EFCE",   # the team's existing "FSO sent" green
+    "D": "#ADD8E6",   # light blue        — adjustments served (left of G, unmoved)
+    "H": "#C6EFCE",   # the team's existing "FSO sent" green (was I before the delete)
 }
 
 
