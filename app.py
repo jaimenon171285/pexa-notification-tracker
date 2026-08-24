@@ -1273,10 +1273,61 @@ ADJ_COL_LETTER = "D"
 # right of it shifted one left, and FSO notes addressed to I started landing in
 # Sign off, a column the team writes by hand. Both entries must match the letters
 # in Apollo's sheetNotes.js.
-APOLLO_COLS = {
-    "D": "#ADD8E6",   # light blue        — adjustments served (left of G, unmoved)
-    "H": "#C6EFCE",   # the team's existing "FSO sent" green (was I before the delete)
+# Apollo's columns, found by HEADER TEXT rather than by letter.
+#
+# Letters are positional. Deleting the PEXA Notes column on 2026-08-23 shifted
+# everything right of it one place left, and notes Apollo addressed to "I"
+# started landing in Sign Off — a column the team writes by hand. Nothing warned
+# anyone; Sheriff spotted it two days later.
+#
+# The header row on the weekly tabs (row 10) reads:
+#   B Settlement Date | C Jurisdiction | D Adjustments | E SD | F JM Bank Notes
+#   G TTB Check | H Draft FSO Sent | I Sign Off | J Status | ...
+#
+# Matching the name means columns can be inserted, deleted or reordered and
+# Apollo follows. If the header is NOT found we refuse to write: guessing a
+# letter is exactly the failure this replaces, and a note in the wrong column
+# looks like success.
+APOLLO_KINDS = {
+    "adjustments": {
+        "headers": ["adjustments", "adjustments served", "adj served"],
+        "fill": "#ADD8E6",   # light blue
+    },
+    "fso": {
+        "headers": ["draft fso sent", "draft fso", "fso sent", "fso"],
+        "fill": "#C6EFCE",   # the team's existing "FSO sent" green
+    },
 }
+# Legacy letter->fill, still honoured when a caller sends an explicit column.
+APOLLO_COLS = {
+    "D": "#ADD8E6",
+    "H": "#C6EFCE",
+}
+
+
+def _col_letter(idx):
+    """0-based column index -> Excel letter. Mirrors _col_index."""
+    letters = ""
+    n = int(idx) + 1
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        letters = chr(65 + rem) + letters
+    return letters
+
+
+def _find_col_by_header(values, names):
+    """Column index whose header cell matches one of `names`, or None.
+
+    Scans the top of the sheet: the weekly tabs open with a summary block and
+    the header row sits below it (row 10 today), so this looks further than the
+    first couple of rows but not so far that it starts matching matter data.
+    """
+    wanted = {n.strip().lower() for n in names}
+    for ri in range(min(20, len(values))):
+        for ci in range(len(values[ri])):
+            if str(values[ri][ci] or "").strip().lower() in wanted:
+                return ci
+    return None
 
 
 def _col_index(col_letter):
@@ -1284,26 +1335,43 @@ def _col_index(col_letter):
     return ord(col_letter.upper()) - ord("A")
 
 
-def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
-    """Write note_text into the given column of every weekly tab row for this
-    matter. Prepends to whatever is already there, so history is never lost."""
+def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
+    """Write note_text into Apollo's column on every weekly tab row for this
+    matter. Prepends to whatever is already there, so history is never lost.
+
+    Pass `kind` ("fso" / "adjustments") and the column is found per sheet by its
+    HEADER TEXT — see APOLLO_KINDS. `col_letter` is the older, positional way and
+    is kept for callers that still send one.
+    """
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     if not sharepoint_url:
         return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
 
     matter_num = str(matter_number or "").strip()
     note_text = str(note_text or "").strip()
-    col_letter = str(col_letter or ADJ_COL_LETTER).strip().upper()
+    kind = str(kind or "").strip().lower() or None
     if not matter_num:
         return {"success": False, "error": "matterNumber is required"}
     if not note_text:
         return {"success": False, "error": "note is required"}
-    if col_letter not in APOLLO_COLS:
-        return {"success": False,
-                "error": f"column {col_letter} is not writable by Apollo "
-                         f"(allowed: {', '.join(sorted(APOLLO_COLS))})"}
-    col_idx = _col_index(col_letter)
-    fill = APOLLO_COLS[col_letter]
+
+    spec = None
+    if kind:
+        spec = APOLLO_KINDS.get(kind)
+        if not spec:
+            return {"success": False,
+                    "error": f"unknown kind {kind} (known: {', '.join(sorted(APOLLO_KINDS))})"}
+        fill = spec["fill"]
+        col_idx = None                      # resolved per sheet, from the header
+        col_letter = None
+    else:
+        col_letter = str(col_letter or ADJ_COL_LETTER).strip().upper()
+        if col_letter not in APOLLO_COLS:
+            return {"success": False,
+                    "error": f"column {col_letter} is not writable by Apollo "
+                             f"(allowed: {', '.join(sorted(APOLLO_COLS))})"}
+        col_idx = _col_index(col_letter)
+        fill = APOLLO_COLS[col_letter]
 
     import re
     try:
@@ -1323,6 +1391,21 @@ def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
                 if not values or len(values) < 2:
                     continue
 
+                # Resolve Apollo's column on THIS sheet, by header. Done per
+                # sheet rather than once, because a tab that has been edited
+                # differently is exactly the case letters get wrong.
+                if kind:
+                    found = _find_col_by_header(values, spec["headers"])
+                    if found is None:
+                        errors.append(f"{sheet}: no column headed "
+                                      f"{' / '.join(spec['headers'])}")
+                        continue
+                    sheet_col_idx = found
+                    sheet_col_letter = _col_letter(found)
+                else:
+                    sheet_col_idx = col_idx
+                    sheet_col_letter = col_letter
+
                 range_start_row = 1
                 if address and "!" in address:
                     m = re.match(r"[A-Z]+(\d+)", address.split("!")[1])
@@ -1340,11 +1423,11 @@ def _push_sheet_note(matter_number, note_text, col_letter=ADJ_COL_LETTER):
                         continue
 
                     excel_row = range_start_row + ri
-                    target_cell = f"{col_letter}{excel_row}"
+                    target_cell = f"{sheet_col_letter}{excel_row}"
 
                     existing = ""
-                    if col_idx < len(values[ri]):
-                        existing = str(values[ri][col_idx] or "").strip()
+                    if sheet_col_idx < len(values[ri]):
+                        existing = str(values[ri][sheet_col_idx] or "").strip()
                     new_value = f"{note_text}\n{existing}" if existing else note_text
 
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
@@ -1452,8 +1535,14 @@ def api_adj_note():
     if required and str(data.get("token", "")) != required:
         return jsonify({"success": False, "error": "unauthorized"}), 401
 
-    result = _push_sheet_note(data.get("matterNumber"), data.get("note"),
-                             data.get("column") or ADJ_COL_LETTER)
+    # `kind` ("fso" / "adjustments") is the way in: the column is found by its
+    # header text, so the sheet can be reorganised without silently redirecting
+    # Apollo. `column` is the older positional form, still accepted.
+    result = _push_sheet_note(
+        data.get("matterNumber"), data.get("note"),
+        col_letter=(None if data.get("kind") else (data.get("column") or ADJ_COL_LETTER)),
+        kind=data.get("kind"),
+    )
     if result.get("success"):
         return jsonify(result), 200
     err = result.get("error") or ""
