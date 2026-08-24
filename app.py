@@ -1464,6 +1464,48 @@ def api_adj_note():
     return jsonify(result), 500
 
 
+@app.route("/api/sheet-headers", methods=["GET"])
+def api_sheet_headers():
+    """GET — dump the header row of each weekly tab.
+
+    Diagnostic. Exists because Apollo used to address its notes by column LETTER,
+    which is positional: deleting the PEXA Notes column on 2026-08-23 shifted
+    everything right of it one place left and Apollo's FSO notes started landing
+    in Sign off. Knowing what the headers actually say is what lets us find the
+    column by name instead of by position."""
+    import re
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 500
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        skip = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
+        want = [s for s in sheets if s.lower().strip() not in skip and "pexa check" not in s.lower()]
+        # One tab is enough to read the layout, and reading them all is what took
+        # this 512MB instance down before.
+        only = request.args.get("sheet")
+        if only:
+            want = [s for s in want if s == only]
+        want = want[:2]
+        out = []
+        for sheet in want:
+            values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+            rows = []
+            for ri in range(min(12, len(values))):
+                cells = [(chr(65 + ci) if ci < 26 else "?" + str(ci), str(values[ri][ci] or "").strip())
+                         for ci in range(min(20, len(values[ri])))]
+                cells = [c for c in cells if c[1]]
+                if cells:
+                    rows.append({"row": ri + 1, "cells": cells})
+            out.append({"sheet": sheet, "address": address, "topRows": rows})
+            del values
+        return jsonify({"success": True, "sheets": out})
+    except Exception as e:
+        logger.error("sheet-headers failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/adj-note/peek", methods=["GET"])
 def api_adj_note_peek():
     """GET ?matter=74254[&column=I] — read back column A and the target column for
