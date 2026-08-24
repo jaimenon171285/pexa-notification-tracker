@@ -1491,8 +1491,16 @@ def api_sheet_headers():
         out = []
         for sheet in want:
             values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+            # The weekly tabs open with a summary block (settlement counts, day
+            # names, standing notes) and the real header sits above the first
+            # matter row, further down than you would guess — row 12 was not far
+            # enough. Caller can widen it.
+            try:
+                upto = int(request.args.get("rows", "30"))
+            except ValueError:
+                upto = 30
             rows = []
-            for ri in range(min(12, len(values))):
+            for ri in range(min(max(1, upto), len(values))):
                 cells = [(chr(65 + ci) if ci < 26 else "?" + str(ci), str(values[ri][ci] or "").strip())
                          for ci in range(min(20, len(values[ri])))]
                 cells = [c for c in cells if c[1]]
