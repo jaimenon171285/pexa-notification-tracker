@@ -397,6 +397,36 @@ class GraphClient:
 
         return response.json()
 
+    def update_excel_range(self, drive_id, item_id, sheet_name, range_addr, values):
+        """Write a block of cells in ONE call. `values` is a 2D list matching the
+        shape of range_addr.
+
+        update_excel_cell is a round trip per cell, which is fine for a note but
+        not for filling a whole column: this instance has 512MB and already logs
+        hourly out-of-memory events, and a 60-row column would be 60 HTTPS calls.
+        The caller builds the full block INCLUDING the cells it is leaving alone,
+        so nothing outside its intent changes.
+        """
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}"
+               f"/workbook/worksheets/{safe_sheet}/range(address='{range_addr}')")
+        payload = {"values": values}
+        response = requests.patch(url, headers=self._headers(), json=payload)
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.patch(url, headers=self._headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def set_excel_cell_fill(self, drive_id, item_id, sheet_name, cell_addr, fill):
+        """Shade one cell, leaving its value alone."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}"
+               f"/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')/format/fill")
+        requests.patch(url, headers=self._headers(), json={"color": fill})
+
     def get_excel_cell_font_color(self, drive_id, item_id, sheet_name, cell_addr):
         """Read a cell's font colour, e.g. "#000000". Diagnostic use."""
         import urllib.parse

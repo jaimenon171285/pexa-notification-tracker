@@ -1553,6 +1553,185 @@ def api_adj_note():
     return jsonify(result), 500
 
 
+# ---------------------------------------------------------------------------
+#  Possession — vacant vs tenanted, filled from Apollo.
+#
+#  Zane checked this by hand on every matter before settlement. Apollo already
+#  parses the answer out of the Actionstep email, so the sheet carries it and the
+#  check becomes a glance (Jai/Sheriff, 2026-08-25). The Possession column was
+#  added at D on 2026-08-25 — found by HEADER here, like the note columns, so it
+#  survives the next insert.
+#
+#  Three rules, all of them about not making things worse:
+#
+#   • A matter Apollo has no answer for is LEFT ALONE, never blanked. Today that
+#     is every purchase — Actionstep's purchase template carries no equivalent of
+#     [[masterdatas_VacantPossesion]].
+#   • A cell holding something a human typed is left alone and reported. Only
+#     Apollo's own three words are ever overwritten.
+#   • One PATCH per tab, not one per row. This instance has 512MB and already
+#     logs hourly out-of-memory events.
+# ---------------------------------------------------------------------------
+APOLLO_POSSESSION_URL = os.getenv(
+    "APOLLO_POSSESSION_URL",
+    "https://australia-southeast1-post-exchange-lw-platform.cloudfunctions.net/possessionLookup",
+)
+POSSESSION_HEADERS = ["possession", "vacant possession", "possession / tenancies"]
+# The only values Apollo will overwrite. Anything else in the cell is someone's
+# own note and is left exactly where it is.
+POSSESSION_OURS = {"vacant", "tenanted", "not sure", ""}
+# Tenanted is the answer that changes what anyone does, so it is the one that
+# gets shaded. Vacant is the default expectation and stays plain.
+POSSESSION_FILL = {"TENANTED": "#FFE0B2"}
+
+
+def _fetch_possession_map():
+    """Ask Apollo what it knows. { "75318": "Vacant", ... }"""
+    token = os.getenv("FIREBASE_WORKSPACE_TOKEN", "") or APOLLO_INGEST_TOKEN
+    if not token:
+        raise RuntimeError("FIREBASE_WORKSPACE_TOKEN not set")
+    r = requests.get(APOLLO_POSSESSION_URL, params={"token": token}, timeout=90)
+    r.raise_for_status()
+    data = r.json()
+    return data.get("matters", {}) or {}
+
+
+def _sync_possession(dry_run=False, only_sheet=None):
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
+
+    import re
+    try:
+        mapping = _fetch_possession_map()
+    except Exception as e:
+        return {"success": False, "error": "could not reach Apollo: %s" % e}
+    if not mapping:
+        return {"success": False, "error": "Apollo returned no possession data"}
+
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
+                       "import", "ttb (2)", "invoices"}
+        tabs, errors = [], []
+
+        for sheet in sheets:
+            if sheet.lower().strip() in skip_sheets:
+                continue
+            if "pexa check" in sheet.lower():
+                continue
+            if only_sheet and sheet.strip().lower() != only_sheet.strip().lower():
+                continue
+            try:
+                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                if not values or len(values) < 2:
+                    continue
+
+                # Header row AND column — the row is needed to know where the
+                # matter rows start, so this cannot use _find_col_by_header.
+                hr = hc = None
+                wanted = {n.lower() for n in POSSESSION_HEADERS}
+                for ri in range(min(20, len(values))):
+                    for ci in range(len(values[ri])):
+                        if str(values[ri][ci] or "").strip().lower() in wanted:
+                            hr, hc = ri, ci
+                            break
+                    if hr is not None:
+                        break
+                if hr is None:
+                    errors.append("%s: no Possession column" % sheet)
+                    continue
+
+                range_start_row = 1
+                if address and "!" in address:
+                    m = re.match(r"[A-Z]+(\d+)", address.split("!")[1])
+                    if m:
+                        range_start_row = int(m.group(1))
+
+                letter = _col_letter(hc)
+                block, changed, kept, unknown = [], [], [], 0
+                for ri in range(hr + 1, len(values)):
+                    row = values[ri]
+                    existing = str(row[hc] or "").strip() if hc < len(row) else ""
+                    cell_a = str(row[0] or "").strip() if row else ""
+                    m = re.match(r"(\d{3,})", cell_a)
+                    want = mapping.get(m.group(1)) if m else None
+
+                    if not want:
+                        if m:
+                            unknown += 1
+                        block.append([existing])
+                    elif existing and existing.lower() not in POSSESSION_OURS:
+                        # Someone typed their own note here. Theirs wins.
+                        kept.append("%s%d=%s" % (letter, range_start_row + ri, existing))
+                        block.append([existing])
+                    elif existing == want:
+                        block.append([existing])
+                    else:
+                        changed.append((range_start_row + ri, want))
+                        block.append([want])
+
+                first = range_start_row + hr + 1
+                last = range_start_row + len(values) - 1
+                addr = "%s%d:%s%d" % (letter, first, letter, last)
+                if changed and not dry_run:
+                    graph_client.update_excel_range(drive_id, item_id, sheet, addr, block)
+                    # Shade only the tenanted ones, and only the ones just
+                    # written — a handful per tab, so the round trips are bounded.
+                    for excel_row, want in changed:
+                        fill = POSSESSION_FILL.get(want)
+                        if fill:
+                            try:
+                                graph_client.set_excel_cell_fill(
+                                    drive_id, item_id, sheet,
+                                    "%s%d" % (letter, excel_row), fill)
+                            except Exception:
+                                pass  # the value landed; the colour is decoration
+                    logger.info("Possession: %s %s - %d written", sheet, addr, len(changed))
+
+                tabs.append({
+                    "sheet": sheet,
+                    "column": letter,
+                    "range": addr,
+                    "written": len(changed),
+                    "values": sorted({w for _, w in changed}),
+                    "left_alone_human": kept,
+                    "no_answer_from_apollo": unknown,
+                })
+            except Exception as sheet_err:
+                errors.append("%s: %s" % (sheet, sheet_err))
+
+        return {
+            "success": True,
+            "dry_run": dry_run,
+            "apollo_knows": len(mapping),
+            "tabs": tabs,
+            "total_written": sum(t["written"] for t in tabs),
+            "errors": errors,
+        }
+    except Exception as e:
+        logger.error("Possession sync failed: %s", e, exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@app.route("/api/possession-sync", methods=["POST", "GET"])
+def api_possession_sync():
+    """POST [?dry=1][&sheet=<tab name>][&token=] - fill the Possession column on
+    the weekly tabs from what Apollo knows. Safe to re-run: it only writes cells
+    that would change, and never touches one a human has written in."""
+    required = os.getenv("APOLLO_NOTE_TOKEN", "")
+    if required:
+        supplied = request.args.get("token") or (request.get_json(silent=True) or {}).get("token")
+        if supplied != required:
+            return jsonify({"success": False, "error": "unauthorized"}), 401
+    result = _sync_possession(
+        dry_run=request.args.get("dry") == "1",
+        only_sheet=request.args.get("sheet"),
+    )
+    return jsonify(result), (200 if result.get("success") else 400)
+
+
 @app.route("/api/sheet-headers", methods=["GET"])
 def api_sheet_headers():
     """GET — dump the header row of each weekly tab.
