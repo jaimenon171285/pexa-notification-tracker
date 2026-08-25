@@ -1650,7 +1650,7 @@ def _sync_possession(dry_run=False, only_sheet=None):
                         range_start_row = int(m.group(1))
 
                 letter = _col_letter(hc)
-                block, changed, kept, unknown = [], [], [], 0
+                changed, kept, unknown = [], [], 0
                 for ri in range(hr + 1, len(values)):
                     row = values[ri]
                     existing = str(row[hc] or "").strip() if hc < len(row) else ""
@@ -1661,22 +1661,40 @@ def _sync_possession(dry_run=False, only_sheet=None):
                     if not want:
                         if m:
                             unknown += 1
-                        block.append([existing])
                     elif existing and existing.lower() not in POSSESSION_OURS:
                         # Someone typed their own note here. Theirs wins.
                         kept.append("%s%d=%s" % (letter, range_start_row + ri, existing))
-                        block.append([existing])
-                    elif existing == want:
-                        block.append([existing])
-                    else:
+                    elif existing != want:
                         changed.append((range_start_row + ri, want))
-                        block.append([want])
 
-                first = range_start_row + hr + 1
-                last = range_start_row + len(values) - 1
-                addr = "%s%d:%s%d" % (letter, first, letter, last)
+                # Write CONTIGUOUS RUNS of changed cells, not the whole column.
+                #
+                # Writing the column in one PATCH would mean sending back every
+                # untouched cell's own value to preserve it — and for the blank
+                # ones that writes an empty STRING where Excel currently has a
+                # genuinely blank cell. ISBLANK and COUNTBLANK stop agreeing, and
+                # the used range on these tabs runs 400+ rows past the data, so
+                # one 10-cell update would have rewritten 412 cells.
+                #
+                # Runs keep every write to a cell we actually mean to change. The
+                # matters for a settlement week sit together, so this is a handful
+                # of calls, not one per row.
+                runs = []
+                for excel_row, want in changed:
+                    if runs and excel_row == runs[-1][0] + len(runs[-1][1]):
+                        runs[-1][1].append([want])
+                    else:
+                        runs.append((excel_row, [[want]]))
+
+                written_ranges = []
+                for start_row, block in runs:
+                    addr = ("%s%d" % (letter, start_row) if len(block) == 1
+                            else "%s%d:%s%d" % (letter, start_row, letter,
+                                                start_row + len(block) - 1))
+                    written_ranges.append(addr)
+                    if not dry_run:
+                        graph_client.update_excel_range(drive_id, item_id, sheet, addr, block)
                 if changed and not dry_run:
-                    graph_client.update_excel_range(drive_id, item_id, sheet, addr, block)
                     # Shade only the tenanted ones, and only the ones just
                     # written — a handful per tab, so the round trips are bounded.
                     for excel_row, want in changed:
@@ -1688,12 +1706,13 @@ def _sync_possession(dry_run=False, only_sheet=None):
                                     "%s%d" % (letter, excel_row), fill)
                             except Exception:
                                 pass  # the value landed; the colour is decoration
-                    logger.info("Possession: %s %s - %d written", sheet, addr, len(changed))
+                    logger.info("Possession: %s - %d written in %d run(s)",
+                                sheet, len(changed), len(runs))
 
                 tabs.append({
                     "sheet": sheet,
                     "column": letter,
-                    "range": addr,
+                    "ranges": written_ranges,
                     "written": len(changed),
                     "values": sorted({w for _, w in changed}),
                     "left_alone_human": kept,
