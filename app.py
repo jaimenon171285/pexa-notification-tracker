@@ -2152,6 +2152,11 @@ scheduler = BackgroundScheduler()
 if RUN_NOTIFICATIONS:
     scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
     scheduler.add_job(check_overdue_tasks, "interval", hours=1, id="overdue_check")
+    # Possession only changes once per matter (Contract Review), so hourly is
+    # plenty. Unlike auto_push_notifications below, this reads one sheet at a
+    # time and never caches the workbook, so it doesn't carry that job's OOM
+    # risk (Jai, 2026-08-29).
+    scheduler.add_job(_sync_possession, "interval", hours=1, id="possession_sync")
     # auto_push_notifications is NOT scheduled any more (Jai, 2026-08-23).
     #
     # It pushed PEXA notifications into the shared spreadsheet's PEXA Notes
@@ -2179,6 +2184,8 @@ scheduler.start()
 if RUN_NOTIFICATIONS:
     logger.info("Running initial email sync...")
     sync_emails()
+    logger.info("Running initial possession sync...")
+    _sync_possession()
 if RUN_WORKSPACES:
     logger.info("Running initial workspace sync...")
     sync_workspaces()
