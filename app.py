@@ -1297,6 +1297,13 @@ APOLLO_KINDS = {
         "headers": ["draft fso sent", "draft fso", "fso sent", "fso"],
         "fill": "#C6EFCE",   # the team's existing "FSO sent" green
     },
+    # Stamp duty forms received from the client — written by Apollo the moment
+    # the last purchaser's form is in, so nobody checks the SharePoint folder
+    # to find out (Jai, 2026-09-07).
+    "sd": {
+        "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
+        "fill": "#FFF2CC",   # light amber, distinct from the two above
+    },
 }
 # Legacy letter->fill, still honoured when a caller sends an explicit column.
 APOLLO_COLS = {
