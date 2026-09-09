@@ -1280,9 +1280,11 @@ ADJ_COL_LETTER = "D"
 # started landing in Sign Off — a column the team writes by hand. Nothing warned
 # anyone; Sheriff spotted it two days later.
 #
-# The header row on the weekly tabs (row 10) reads:
+# The header row on the weekly tabs (row 10) read, on 2026-08-23:
 #   B Settlement Date | C Jurisdiction | D Adjustments | E SD | F JM Bank Notes
 #   G TTB Check | H Draft FSO Sent | I Sign Off | J Status | ...
+# (Possession was inserted at D on 2026-08-26 and shifted the rest right; the
+# letters are illustrative — the header text is what is matched.)
 #
 # Matching the name means columns can be inserted, deleted or reordered and
 # Apollo follows. If the header is NOT found we refuse to write: guessing a
@@ -1303,6 +1305,19 @@ APOLLO_KINDS = {
     "sd": {
         "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
         "fill": "#FFF2CC",   # light amber, distinct from the two above
+    },
+    # JM Bank Notes (Jai, 2026-09-09): the incoming bank invited / cash, and on
+    # a sale the mortgagee on title invited / ready in PEXA. Four Apollo kinds
+    # share this one column.
+    "bank": {
+        "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
+        "fill": "#E4DFEC",   # light lavender
+    },
+    # TTB Check (Jai, 2026-09-09): what the Trust Trial Balance says is held,
+    # written by Apollo when an upload shows the figure new or changed.
+    "ttb": {
+        "headers": ["ttb check", "ttb", "trust balance"],
+        "fill": "#DDEBF7",   # light blue-grey
     },
 }
 # Legacy letter->fill, still honoured when a caller sends an explicit column.
