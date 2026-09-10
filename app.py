@@ -1295,7 +1295,7 @@ ADJ_COL_LETTER = "D"
 # and which a person typed (Jai, 2026-09-10). It used to be a different shade
 # per column, which said what KIND of note it was — but the column header
 # already says that, and what people want to know is whether a human wrote it.
-APOLLO_FILL = "#7030A0"   # Office standard Purple
+APOLLO_FILL = "#A02B93"   # the purple the team already uses in the sheet
 APOLLO_FONT = "#FFFFFF"   # white, for contrast on it
 
 APOLLO_KINDS = {
