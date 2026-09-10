@@ -1290,40 +1290,48 @@ ADJ_COL_LETTER = "D"
 # Apollo follows. If the header is NOT found we refuse to write: guessing a
 # letter is exactly the failure this replaces, and a note in the wrong column
 # looks like success.
+# Apollo's own colour. Every note Apollo writes is purple with white text, so
+# anyone scanning a weekly tab can see at a glance which lines came from Apollo
+# and which a person typed (Jai, 2026-09-10). It used to be a different shade
+# per column, which said what KIND of note it was — but the column header
+# already says that, and what people want to know is whether a human wrote it.
+APOLLO_FILL = "#7030A0"   # Office standard Purple
+APOLLO_FONT = "#FFFFFF"   # white, for contrast on it
+
 APOLLO_KINDS = {
     "adjustments": {
         "headers": ["adjustments", "adjustments served", "adj served"],
-        "fill": "#ADD8E6",   # light blue
+        "fill": APOLLO_FILL,
     },
     "fso": {
         "headers": ["draft fso sent", "draft fso", "fso sent", "fso"],
-        "fill": "#C6EFCE",   # the team's existing "FSO sent" green
+        "fill": APOLLO_FILL,
     },
     # Stamp duty forms received from the client — written by Apollo the moment
     # the last purchaser's form is in, so nobody checks the SharePoint folder
     # to find out (Jai, 2026-09-07).
     "sd": {
         "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
-        "fill": "#FFF2CC",   # light amber, distinct from the two above
+        "fill": APOLLO_FILL,
     },
     # JM Bank Notes (Jai, 2026-09-09): the incoming bank invited / cash, and on
     # a sale the mortgagee on title invited / ready in PEXA. Four Apollo kinds
     # share this one column.
     "bank": {
         "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
-        "fill": "#E4DFEC",   # light lavender
+        "fill": APOLLO_FILL,
     },
     # TTB Check (Jai, 2026-09-09): what the Trust Trial Balance says is held,
     # written by Apollo when an upload shows the figure new or changed.
     "ttb": {
         "headers": ["ttb check", "ttb", "trust balance"],
-        "fill": "#DDEBF7",   # light blue-grey
+        "fill": APOLLO_FILL,
     },
 }
 # Legacy letter->fill, still honoured when a caller sends an explicit column.
 APOLLO_COLS = {
-    "D": "#ADD8E6",
-    "H": "#C6EFCE",
+    "D": APOLLO_FILL,
+    "H": APOLLO_FILL,
 }
 
 
@@ -1453,7 +1461,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
                     new_value = f"{note_text}\n{existing}" if existing else note_text
 
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
-                                                   new_value, fill=fill)
+                                                   new_value, fill=fill, font=APOLLO_FONT)
                     updated.append(f"{sheet}!{target_cell}")
                     logger.info(f"Apollo note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:

@@ -359,9 +359,11 @@ class GraphClient:
         data = self._request("GET", url, params={"$select": "values,address"})
         return data.get("values", []), data.get("address", "")
 
-    def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value, fill=None):
+    def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value, fill=None, font=None):
         """Write a value to a specific cell in a worksheet, with no text wrapping.
-        Pass fill="#RRGGBB" to also shade the cell (used to mark Apollo's notes)."""
+        Pass fill="#RRGGBB" to also shade the cell (used to mark Apollo's notes),
+        and font="#RRGGBB" for the text colour on that fill — white on Apollo's
+        purple (Jai, 2026-09-10)."""
         import urllib.parse
         safe_sheet = urllib.parse.quote(sheet_name, safe="")
         url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')"
@@ -384,14 +386,14 @@ class GraphClient:
             try:
                 requests.patch(f"{url}/format/fill", headers=self._headers(),
                                json={"color": fill})
-                # Force the font to black as well. Writing a value does NOT reset the
+                # Set the font too. Writing a value does NOT reset the
                 # font colour, so a cell that previously held white text on a dark
                 # fill kept the white font — our note landed on a light blue fill and
                 # was invisible, and staff were recolouring each one by hand
                 # (Sheriff 2026-08-12). Only done when we set the fill, so cells we
                 # aren't styling keep whatever the team chose.
                 requests.patch(f"{url}/format/font", headers=self._headers(),
-                               json={"color": "#000000"})
+                               json={"color": font or "#000000"})
             except Exception:
                 pass  # Non-critical — the note itself already landed
 
