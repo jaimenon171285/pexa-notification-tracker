@@ -1833,6 +1833,76 @@ def api_sheet_headers():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/adj-note/recolour", methods=["POST"])
+def api_adj_note_recolour():
+    """POST {matterNumber, kind, onlyIfFill[, dry][, token]} — re-shade Apollo's
+    cell for this matter and kind on every weekly tab, WITHOUT touching its text.
+
+    Written for 11 Sep 2026: for a day Apollo's notes went out in #A02B93, which
+    turned out to be Thomas's own colour. Rewriting the note would prepend it a
+    second time, so this only puts the colour back. `onlyIfFill` is required and
+    a cell is changed only while it still has exactly that fill — a cell someone
+    has recoloured since is left alone."""
+    import re
+    data = request.get_json(silent=True) or {}
+    required = os.getenv("APOLLO_NOTE_TOKEN", "")
+    if required and str(data.get("token", "")) != required:
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+    matter_num = str(data.get("matterNumber") or "").strip()
+    kind = str(data.get("kind") or "").strip().lower()
+    only_if = str(data.get("onlyIfFill") or "").strip().upper()
+    dry = bool(data.get("dry"))
+    spec = APOLLO_KINDS.get(kind)
+    if not matter_num or not spec:
+        return jsonify({"success": False, "error": "matterNumber and a known kind are required"}), 400
+    if not re.fullmatch(r"#[0-9A-F]{6}", only_if):
+        return jsonify({"success": False, "error": "onlyIfFill (e.g. #A02B93) is required"}), 400
+
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 500
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
+                       "import", "ttb (2)", "invoices"}
+        done, left = [], []
+        for sheet in sheets:
+            if sheet.lower().strip() in skip_sheets or "pexa check" in sheet.lower():
+                continue
+            try:
+                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                if not values or len(values) < 2:
+                    continue
+                col = _find_col_by_header(values, spec["headers"])
+                if col is None:
+                    continue
+                start = 1
+                if address and "!" in address:
+                    m = re.match(r"[A-Z]+(\d+)", address.split("!")[1])
+                    if m:
+                        start = int(m.group(1))
+                for ri in range(len(values)):
+                    a = str(values[ri][0] or "").strip()
+                    if not a.startswith(matter_num) or a[len(matter_num):len(matter_num) + 1].isdigit():
+                        continue
+                    cell = f"{_col_letter(col)}{start + ri}"
+                    now = str(graph_client.get_excel_cell_fill(drive_id, item_id, sheet, cell) or "").upper()
+                    if now != only_if:
+                        left.append({"cell": f"{sheet}!{cell}", "fill": now})
+                        continue
+                    if not dry:
+                        graph_client.set_excel_cell_fill(drive_id, item_id, sheet, cell, spec["fill"])
+                        graph_client.set_excel_cell_font_color(drive_id, item_id, sheet, cell, APOLLO_FONT)
+                    done.append({"cell": f"{sheet}!{cell}", "from": now, "to": spec["fill"]})
+            except Exception as sheet_err:
+                left.append({"sheet": sheet, "error": str(sheet_err)})
+        return jsonify({"success": True, "dry": dry, "matter": matter_num, "kind": kind,
+                        "recoloured": done, "leftAlone": left})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/adj-note/peek", methods=["GET"])
 def api_adj_note_peek():
     """GET ?matter=74254[&column=I] — read back column A and the target column for

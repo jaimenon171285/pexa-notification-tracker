@@ -429,6 +429,14 @@ class GraphClient:
                f"/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')/format/fill")
         requests.patch(url, headers=self._headers(), json={"color": fill})
 
+    def set_excel_cell_font_color(self, drive_id, item_id, sheet_name, cell_addr, color):
+        """Set one cell's font colour, leaving its value alone."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}"
+               f"/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')/format/font")
+        requests.patch(url, headers=self._headers(), json={"color": color})
+
     def get_excel_cell_font_color(self, drive_id, item_id, sheet_name, cell_addr):
         """Read a cell's font colour, e.g. "#000000". Diagnostic use."""
         import urllib.parse
