@@ -1329,6 +1329,25 @@ APOLLO_KINDS = {
         "headers": ["ttb check", "ttb", "trust balance"],
         "fill": "#DDEBF7",   # light blue-grey
     },
+
+    # ── Colour by what the note SAYS, not only by column (Jai, 2026-09-11) ──
+    # These land in the same column as the kind above them, but in a colour of
+    # their own. "Searches all received" and "SAS received" are Thomas's cue —
+    # the adjustments are his next job — so they are in Thomas's colour, white
+    # on purple, exactly as he shades his own cells. "MOT ready in PEXA" is a
+    # sale that is ready to go, so it is the team's done-green.
+    "searchesReceived": {
+        "headers": ["adjustments", "adjustments served", "adj served"],
+        "fill": "#A02B93", "font": "#FFFFFF",   # Thomas's colour
+    },
+    "sasReceived": {
+        "headers": ["adjustments", "adjustments served", "adj served"],
+        "fill": "#A02B93", "font": "#FFFFFF",   # Thomas's colour
+    },
+    "motReady": {
+        "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
+        "fill": "#C6EFCE",                      # the team's done-green
+    },
 }
 # Legacy letter->fill, still honoured when a caller sends an explicit column.
 APOLLO_COLS = {
@@ -1394,6 +1413,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
             return {"success": False,
                     "error": f"unknown kind {kind} (known: {', '.join(sorted(APOLLO_KINDS))})"}
         fill = spec["fill"]
+        font = spec.get("font", APOLLO_FONT)
         col_idx = None                      # resolved per sheet, from the header
         col_letter = None
     else:
@@ -1404,6 +1424,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
                              f"(allowed: {', '.join(sorted(APOLLO_COLS))})"}
         col_idx = _col_index(col_letter)
         fill = APOLLO_COLS[col_letter]
+        font = APOLLO_FONT
 
     import re
     try:
@@ -1463,7 +1484,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
                     new_value = f"{note_text}\n{existing}" if existing else note_text
 
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
-                                                   new_value, fill=fill, font=APOLLO_FONT)
+                                                   new_value, fill=fill, font=font)
                     updated.append(f"{sheet}!{target_cell}")
                     logger.info(f"Apollo note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:
@@ -1893,7 +1914,7 @@ def api_adj_note_recolour():
                         continue
                     if not dry:
                         graph_client.set_excel_cell_fill(drive_id, item_id, sheet, cell, spec["fill"])
-                        graph_client.set_excel_cell_font_color(drive_id, item_id, sheet, cell, APOLLO_FONT)
+                        graph_client.set_excel_cell_font_color(drive_id, item_id, sheet, cell, spec.get("font", APOLLO_FONT))
                     done.append({"cell": f"{sheet}!{cell}", "from": now, "to": spec["fill"]})
             except Exception as sheet_err:
                 left.append({"sheet": sheet, "error": str(sheet_err)})
