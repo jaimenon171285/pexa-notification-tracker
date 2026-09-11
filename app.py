@@ -1331,20 +1331,23 @@ APOLLO_KINDS = {
     },
 
     # ── Colour by what the note SAYS, not only by column (Jai, 2026-09-11) ──
+    # Keys are LOWER CASE: every incoming kind is lower-cased before lookup,
+    # so a camelCase key here can never match (it did not, on the first
+    # deploy — caught before Apollo started sending these kinds).
     # These land in the same column as the kind above them, but in a colour of
     # their own. "Searches all received" and "SAS received" are Thomas's cue —
     # the adjustments are his next job — so they are in Thomas's colour, white
     # on purple, exactly as he shades his own cells. "MOT ready in PEXA" is a
     # sale that is ready to go, so it is the team's done-green.
-    "searchesReceived": {
+    "searchesreceived": {
         "headers": ["adjustments", "adjustments served", "adj served"],
         "fill": "#A02B93", "font": "#FFFFFF",   # Thomas's colour
     },
-    "sasReceived": {
+    "sasreceived": {
         "headers": ["adjustments", "adjustments served", "adj served"],
         "fill": "#A02B93", "font": "#FFFFFF",   # Thomas's colour
     },
-    "motReady": {
+    "motready": {
         "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
         "fill": "#C6EFCE",                      # the team's done-green
     },
