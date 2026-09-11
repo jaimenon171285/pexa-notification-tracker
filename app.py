@@ -1290,48 +1290,50 @@ ADJ_COL_LETTER = "D"
 # Apollo follows. If the header is NOT found we refuse to write: guessing a
 # letter is exactly the failure this replaces, and a note in the wrong column
 # looks like success.
-# Apollo's own colour. Every note Apollo writes is purple with white text, so
-# anyone scanning a weekly tab can see at a glance which lines came from Apollo
-# and which a person typed (Jai, 2026-09-10). It used to be a different shade
-# per column, which said what KIND of note it was — but the column header
-# already says that, and what people want to know is whether a human wrote it.
-APOLLO_FILL = "#A02B93"   # the purple the team already uses in the sheet
-APOLLO_FONT = "#FFFFFF"   # white, for contrast on it
+# Apollo's notes keep a pale fill per column, with black text.
+#
+# Briefly (10-11 Sep 2026) every Apollo note was #A02B93 purple with white text.
+# That purple is THOMAS'S OWN COLOUR in the workbook — each person has one — so
+# every Apollo note read as if Thomas had written it, and the FSO column lost
+# the green the team scans for to see an FSO has gone (Zane, 2026-09-11). The
+# lesson: a colour found in the sheet may belong to a person. Never pick one
+# from the workbook without asking whose it is.
+APOLLO_FONT = "#000000"   # black on the pale fills below
 
 APOLLO_KINDS = {
     "adjustments": {
         "headers": ["adjustments", "adjustments served", "adj served"],
-        "fill": APOLLO_FILL,
+        "fill": "#ADD8E6",   # light blue
     },
     "fso": {
         "headers": ["draft fso sent", "draft fso", "fso sent", "fso"],
-        "fill": APOLLO_FILL,
+        "fill": "#C6EFCE",   # the team's existing "FSO sent" green — the one people scan for
     },
     # Stamp duty forms received from the client — written by Apollo the moment
     # the last purchaser's form is in, so nobody checks the SharePoint folder
     # to find out (Jai, 2026-09-07).
     "sd": {
         "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
-        "fill": APOLLO_FILL,
+        "fill": "#FFF2CC",   # light amber
     },
     # JM Bank Notes (Jai, 2026-09-09): the incoming bank invited / cash, and on
     # a sale the mortgagee on title invited / ready in PEXA. Four Apollo kinds
     # share this one column.
     "bank": {
         "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
-        "fill": APOLLO_FILL,
+        "fill": "#E4DFEC",   # light lavender
     },
     # TTB Check (Jai, 2026-09-09): what the Trust Trial Balance says is held,
     # written by Apollo when an upload shows the figure new or changed.
     "ttb": {
         "headers": ["ttb check", "ttb", "trust balance"],
-        "fill": APOLLO_FILL,
+        "fill": "#DDEBF7",   # light blue-grey
     },
 }
 # Legacy letter->fill, still honoured when a caller sends an explicit column.
 APOLLO_COLS = {
-    "D": APOLLO_FILL,
-    "H": APOLLO_FILL,
+    "D": "#ADD8E6",
+    "H": "#C6EFCE",
 }
 
 
