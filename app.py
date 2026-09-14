@@ -1807,6 +1807,174 @@ def api_possession_sync():
     return jsonify(result), (200 if result.get("success") else 400)
 
 
+# ---------------------------------------------------------------------------
+#  Responsible — who owns the matter, filled from Apollo (Jai, 2026-09-15).
+#
+#  Purchases are Zane's, sales Thomas's, and matters Sheriff chooses are his
+#  alone. Apollo decides (responsible.js); this writes the NAME in that person's
+#  own workbook colour — the colours in the tab's colour guide (MS / Z / TR) —
+#  so the column reads the way each person already shades their cells.
+#
+#  Same rules as Possession above: found by HEADER; a matter Apollo does not
+#  answer for is left alone; a cell holding anything but one of Apollo's three
+#  names is someone's own note and is left alone and reported; only cells that
+#  change are written, in contiguous runs.
+# ---------------------------------------------------------------------------
+APOLLO_RESPONSIBLE_URL = os.getenv(
+    "APOLLO_RESPONSIBLE_URL",
+    "https://australia-southeast1-post-exchange-lw-platform.cloudfunctions.net/responsibleLookup",
+)
+RESPONSIBLE_HEADERS = ["responsible", "responsible person"]
+RESPONSIBLE_OURS = {"zane", "thomas", "sheriff", ""}
+
+
+def _fetch_responsible_map():
+    """Ask Apollo. { "75318": {"value": "Zane", "fill": "#156082", "font": "#FFFFFF"}, ... }"""
+    token = os.getenv("FIREBASE_WORKSPACE_TOKEN", "") or APOLLO_INGEST_TOKEN
+    if not token:
+        raise RuntimeError("FIREBASE_WORKSPACE_TOKEN not set")
+    r = requests.get(APOLLO_RESPONSIBLE_URL, params={"token": token}, timeout=90)
+    r.raise_for_status()
+    return r.json().get("matters", {}) or {}
+
+
+def _sync_responsible(dry_run=False, only_sheet=None):
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
+
+    import re
+    try:
+        mapping = _fetch_responsible_map()
+    except Exception as e:
+        return {"success": False, "error": "could not reach Apollo: %s" % e}
+    if not mapping:
+        return {"success": False, "error": "Apollo returned no responsible data"}
+
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
+                       "import", "ttb (2)", "invoices"}
+        tabs, errors = [], []
+        wanted = {n.lower() for n in RESPONSIBLE_HEADERS}
+
+        for sheet in sheets:
+            if sheet.lower().strip() in skip_sheets or "pexa check" in sheet.lower():
+                continue
+            if only_sheet and sheet.strip().lower() != only_sheet.strip().lower():
+                continue
+            try:
+                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                if not values or len(values) < 2:
+                    continue
+
+                hr = hc = None
+                for ri in range(min(20, len(values))):
+                    for ci in range(len(values[ri])):
+                        if str(values[ri][ci] or "").strip().lower() in wanted:
+                            hr, hc = ri, ci
+                            break
+                    if hr is not None:
+                        break
+                if hr is None:
+                    # Older tabs pre-date the column. Not an error worth an alarm.
+                    continue
+
+                range_start_row = 1
+                if address and "!" in address:
+                    m = re.match(r"[A-Z]+(\d+)", address.split("!")[1])
+                    if m:
+                        range_start_row = int(m.group(1))
+
+                letter = _col_letter(hc)
+                changed, kept, unknown = [], [], 0
+                for ri in range(hr + 1, len(values)):
+                    row = values[ri]
+                    existing = str(row[hc] or "").strip() if hc < len(row) else ""
+                    cell_a = str(row[0] or "").strip() if row else ""
+                    m = re.match(r"(\d{3,})", cell_a)
+                    want = mapping.get(m.group(1)) if m else None
+                    value = str((want or {}).get("value") or "").strip()
+
+                    if not value:
+                        if m:
+                            unknown += 1
+                    elif existing and existing.lower() not in RESPONSIBLE_OURS:
+                        kept.append("%s%d=%s" % (letter, range_start_row + ri, existing))
+                    elif existing != value:
+                        changed.append((range_start_row + ri, value, want.get("fill"), want.get("font")))
+
+                runs = []
+                for excel_row, value, _f, _t in changed:
+                    if runs and excel_row == runs[-1][0] + len(runs[-1][1]):
+                        runs[-1][1].append([value])
+                    else:
+                        runs.append((excel_row, [[value]]))
+
+                written_ranges = []
+                for start_row, block in runs:
+                    addr = ("%s%d" % (letter, start_row) if len(block) == 1
+                            else "%s%d:%s%d" % (letter, start_row, letter,
+                                                start_row + len(block) - 1))
+                    written_ranges.append(addr)
+                    if not dry_run:
+                        graph_client.update_excel_range(drive_id, item_id, sheet, addr, block)
+                if changed and not dry_run:
+                    for excel_row, _v, fill, font in changed:
+                        cell = "%s%d" % (letter, excel_row)
+                        try:
+                            if fill:
+                                graph_client.set_excel_cell_fill(drive_id, item_id, sheet, cell, fill)
+                            if font:
+                                graph_client.set_excel_cell_font_color(drive_id, item_id, sheet, cell, font)
+                        except Exception:
+                            pass  # the name landed; the colour is decoration
+                    logger.info("Responsible: %s - %d written in %d run(s)",
+                                sheet, len(changed), len(runs))
+
+                tabs.append({
+                    "sheet": sheet,
+                    "column": letter,
+                    "ranges": written_ranges,
+                    "written": len(changed),
+                    "values": sorted({v for _, v, _f, _t in changed}),
+                    "left_alone_human": kept,
+                    "no_answer_from_apollo": unknown,
+                })
+            except Exception as sheet_err:
+                errors.append("%s: %s" % (sheet, sheet_err))
+
+        return {
+            "success": True,
+            "dry_run": dry_run,
+            "apollo_knows": len(mapping),
+            "tabs": tabs,
+            "total_written": sum(t["written"] for t in tabs),
+            "errors": errors,
+        }
+    except Exception as e:
+        logger.error("Responsible sync failed: %s", e, exc_info=True)
+        return {"success": False, "error": str(e)}
+
+
+@app.route("/api/responsible-sync", methods=["POST", "GET"])
+def api_responsible_sync():
+    """POST [?dry=1][&sheet=<tab name>][&token=] - fill the Responsible column on
+    the weekly tabs from Apollo. Safe to re-run: writes only cells that would
+    change, never one a human has written in."""
+    required = os.getenv("APOLLO_NOTE_TOKEN", "")
+    if required:
+        supplied = request.args.get("token") or (request.get_json(silent=True) or {}).get("token")
+        if supplied != required:
+            return jsonify({"success": False, "error": "unauthorized"}), 401
+    result = _sync_responsible(
+        dry_run=request.args.get("dry") == "1",
+        only_sheet=request.args.get("sheet"),
+    )
+    return jsonify(result), (200 if result.get("success") else 400)
+
+
 @app.route("/api/sheet-headers", methods=["GET"])
 def api_sheet_headers():
     """GET — dump the header row of each weekly tab.
@@ -2283,6 +2451,9 @@ if RUN_NOTIFICATIONS:
     # time and never caches the workbook, so it doesn't carry that job's OOM
     # risk (Jai, 2026-08-29).
     scheduler.add_job(_sync_possession, "interval", hours=1, id="possession_sync")
+    # Responsible (Zane / Thomas / Sheriff-only) — hourly too, so a matter that
+    # moves onto a new weekly tab is filled without anyone asking (Jai, 2026-09-15).
+    scheduler.add_job(_sync_responsible, "interval", hours=1, id="responsible_sync")
     # auto_push_notifications is NOT scheduled any more (Jai, 2026-08-23).
     #
     # It pushed PEXA notifications into the shared spreadsheet's PEXA Notes
