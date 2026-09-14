@@ -1838,7 +1838,7 @@ def _fetch_responsible_map():
     return r.json().get("matters", {}) or {}
 
 
-def _sync_responsible(dry_run=False, only_sheet=None):
+def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     if not sharepoint_url:
         return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
@@ -1888,7 +1888,7 @@ def _sync_responsible(dry_run=False, only_sheet=None):
                         range_start_row = int(m.group(1))
 
                 letter = _col_letter(hc)
-                changed, kept, unknown = [], [], 0
+                changed, kept, unknown, repaint = [], [], 0, []
                 for ri in range(hr + 1, len(values)):
                     row = values[ri]
                     existing = str(row[hc] or "").strip() if hc < len(row) else ""
@@ -1904,6 +1904,9 @@ def _sync_responsible(dry_run=False, only_sheet=None):
                         kept.append("%s%d=%s" % (letter, range_start_row + ri, existing))
                     elif existing != value:
                         changed.append((range_start_row + ri, value, want.get("fill"), want.get("font")))
+                    elif recolour:
+                        # Already Apollo's name — re-shade it without rewriting it.
+                        repaint.append((range_start_row + ri, value, want.get("fill"), want.get("font")))
 
                 runs = []
                 for excel_row, value, _f, _t in changed:
@@ -1920,18 +1923,30 @@ def _sync_responsible(dry_run=False, only_sheet=None):
                     written_ranges.append(addr)
                     if not dry_run:
                         graph_client.update_excel_range(drive_id, item_id, sheet, addr, block)
-                if changed and not dry_run:
-                    for excel_row, _v, fill, font in changed:
-                        cell = "%s%d" % (letter, excel_row)
+                # Colour in RUNS of the same person, not cell by cell. Two Graph
+                # calls per cell was ~150 round trips on one tab, which outlived
+                # the request and got the worker killed part-way through the
+                # colouring (2026-09-14: names landed, white text did not).
+                colour_runs = []
+                for excel_row, v, fill, font in sorted(changed + repaint):
+                    last = colour_runs[-1] if colour_runs else None
+                    if last and excel_row == last[1] + 1 and v == last[2]:
+                        last[1] = excel_row
+                    else:
+                        colour_runs.append([excel_row, excel_row, v, fill, font])
+                if colour_runs and not dry_run:
+                    for start, end, _v, fill, font in colour_runs:
+                        addr = ("%s%d" % (letter, start) if start == end
+                                else "%s%d:%s%d" % (letter, start, letter, end))
                         try:
                             if fill:
-                                graph_client.set_excel_cell_fill(drive_id, item_id, sheet, cell, fill)
+                                graph_client.set_excel_cell_fill(drive_id, item_id, sheet, addr, fill)
                             if font:
-                                graph_client.set_excel_cell_font_color(drive_id, item_id, sheet, cell, font)
+                                graph_client.set_excel_cell_font_color(drive_id, item_id, sheet, addr, font)
                         except Exception:
                             pass  # the name landed; the colour is decoration
-                    logger.info("Responsible: %s - %d written in %d run(s)",
-                                sheet, len(changed), len(runs))
+                    logger.info("Responsible: %s - %d written, %d coloured in %d run(s)",
+                                sheet, len(changed), len(changed) + len(repaint), len(colour_runs))
 
                 tabs.append({
                     "sheet": sheet,
@@ -1939,6 +1954,8 @@ def _sync_responsible(dry_run=False, only_sheet=None):
                     "ranges": written_ranges,
                     "written": len(changed),
                     "values": sorted({v for _, v, _f, _t in changed}),
+                    "coloured": len(changed) + len(repaint),
+                    "colour_runs": len(colour_runs),
                     "left_alone_human": kept,
                     "no_answer_from_apollo": unknown,
                 })
@@ -1968,10 +1985,22 @@ def api_responsible_sync():
         supplied = request.args.get("token") or (request.get_json(silent=True) or {}).get("token")
         if supplied != required:
             return jsonify({"success": False, "error": "unauthorized"}), 401
-    result = _sync_responsible(
-        dry_run=request.args.get("dry") == "1",
-        only_sheet=request.args.get("sheet"),
-    )
+    # recolour=1 also re-shades cells already holding Apollo's name (one-off
+    # repair after the 2026-09-14 first run lost its white text).
+    dry = request.args.get("dry") == "1"
+    kwargs = dict(dry_run=dry, only_sheet=request.args.get("sheet"),
+                  recolour=request.args.get("recolour") == "1")
+    if not dry:
+        # A real run is dozens of Graph writes. Inside the request it outlived
+        # gunicorn's 30s worker timeout and was killed part-way (2026-09-14), so
+        # it runs in the background — like the hourly job — and is read back
+        # with /api/adj-note/peek.
+        import threading
+        threading.Thread(target=lambda: logger.info("Responsible sync (manual): %s",
+                                                    _sync_responsible(**kwargs)),
+                         daemon=True).start()
+        return jsonify({"success": True, "started": True, "note": "running in the background"}), 202
+    result = _sync_responsible(**kwargs)
     return jsonify(result), (200 if result.get("success") else 400)
 
 
