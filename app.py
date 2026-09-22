@@ -1351,6 +1351,34 @@ APOLLO_KINDS = {
         "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
         "fill": "#C6EFCE",                      # the team's done-green
     },
+
+    # ── The SD cell says whose turn it is (Jai, 2026-09-22) ──
+    # The cell takes the colour of its latest line. Forms / DOL / SVD received
+    # and "drafted" are the paralegals' to act on: their grey, white text (the
+    # "Paralegal to draft" key in the workbook's colour guide). A draft sent
+    # for review goes into the reviewer's own colour — the same three the
+    # Responsible column uses (Apollo's responsible.js). Lodged is finished:
+    # the pale done-green. The old "sd" kind above stays for any older caller.
+    "sdtodo": {
+        "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
+        "fill": "#A5A5A5", "font": "#FFFFFF",   # paralegals
+    },
+    "sdreviewsheriff": {
+        "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
+        "fill": "#98FC04", "font": "#000000",   # Sheriff
+    },
+    "sdreviewzane": {
+        "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
+        "fill": "#156082", "font": "#FFFFFF",   # Zane
+    },
+    "sdreviewthomas": {
+        "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
+        "fill": "#A02B93", "font": "#FFFFFF",   # Thomas
+    },
+    "sdlodged": {
+        "headers": ["sd", "stamp duty", "sd forms", "stamp duty forms"],
+        "fill": "#C6EFCE",                      # the team's done-green
+    },
 }
 # Legacy letter->fill, still honoured when a caller sends an explicit column.
 APOLLO_COLS = {
