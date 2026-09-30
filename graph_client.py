@@ -324,6 +324,25 @@ class GraphClient:
         if self._sp_drive_id and self._sp_item_id:
             return self._sp_drive_id, self._sp_item_id
 
+        # The workbook by its ids, when set (Jai, 2026-10-01: the settlements
+        # spreadsheet moves to a new file each month). SHAREPOINT_ITEM_ID wins
+        # over the sharing link; the drive comes from SHAREPOINT_DRIVE_ID, else
+        # from the sharing link (the library does not change).
+        env_item = os.getenv("SHAREPOINT_ITEM_ID", "").strip()
+        if env_item:
+            env_drive = os.getenv("SHAREPOINT_DRIVE_ID", "").strip()
+            if not env_drive:
+                env_drive, _ = self._resolve_share(sharing_url)
+            self._sp_drive_id, self._sp_item_id = env_drive, env_item
+            logger.info(f"SharePoint file from SHAREPOINT_ITEM_ID: driveId={env_drive[:20]}..., itemId={env_item[:20]}...")
+            return self._sp_drive_id, self._sp_item_id
+
+        self._sp_drive_id, self._sp_item_id = self._resolve_share(sharing_url)
+        logger.info(f"Resolved SharePoint file: driveId={self._sp_drive_id[:20]}..., itemId={self._sp_item_id[:20]}...")
+        return self._sp_drive_id, self._sp_item_id
+
+    def _resolve_share(self, sharing_url):
+        """A sharing URL → (driveId, itemId), uncached."""
         import base64
         # Encode sharing URL as base64url per MS Graph spec
         encoded = base64.b64encode(sharing_url.encode("utf-8")).decode("utf-8")
@@ -332,10 +351,7 @@ class GraphClient:
 
         url = f"{GRAPH_API_BASE}/shares/{share_token}/driveItem"
         data = self._request("GET", url)
-        self._sp_drive_id = data["parentReference"]["driveId"]
-        self._sp_item_id = data["id"]
-        logger.info(f"Resolved SharePoint file: driveId={self._sp_drive_id[:20]}..., itemId={self._sp_item_id[:20]}...")
-        return self._sp_drive_id, self._sp_item_id
+        return data["parentReference"]["driveId"], data["id"]
 
     def get_excel_worksheets(self, drive_id, item_id):
         """List all worksheet names in the Excel workbook."""
