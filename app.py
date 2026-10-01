@@ -2367,11 +2367,13 @@ def api_repair_formula():
     dry answer shows the cell, what it holds now (which is discarded), the R1C1
     formula it would write, its expected A1 reading and the donor row.
 
-    Token-guarded, always: the token must match FIREBASE_WORKSPACE_TOKEN (the
-    same secret Apollo's lookups use) or APOLLO_NOTE_TOKEN; with neither set on
+    Token-guarded, always: the token must match the secret this instance uses
+    for Apollo's lookups (FIREBASE_WORKSPACE_TOKEN, else APOLLO_INGEST_TOKEN -
+    Apollo's WORKSPACE_CREATE_SECRET) or APOLLO_NOTE_TOKEN; with none set on
     this instance the endpoint refuses."""
     data = request.get_json(silent=True) or {}
-    accepted = [t for t in (os.getenv("FIREBASE_WORKSPACE_TOKEN", ""), os.getenv("APOLLO_NOTE_TOKEN", "")) if t]
+    accepted = [t for t in (os.getenv("FIREBASE_WORKSPACE_TOKEN", ""), APOLLO_INGEST_TOKEN,
+                            os.getenv("APOLLO_NOTE_TOKEN", "")) if t]
     if not accepted:
         return jsonify({"success": False, "error": "no token configured on this instance - repair disabled"}), 503
     supplied = str(data.get("token") or request.args.get("token") or "")
