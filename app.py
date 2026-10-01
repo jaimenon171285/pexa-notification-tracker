@@ -1250,17 +1250,40 @@ def _range_start_row(address):
     return 1
 
 
-def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
+def _workbook_not_configured():
+    """None when the settlements workbook can be opened, else the error to
+    return. Since 4dc6ab1 the workbook is found by SHAREPOINT_ITEM_ID (+
+    SHAREPOINT_DRIVE_ID) when set, so those two are enough on their own; the
+    sharing link (SHAREPOINT_EXCEL_URL) is only needed without them. Every
+    entry point used to return early on an empty SHAREPOINT_EXCEL_URL even when
+    the ids were set, so clearing the stale link would have silently switched
+    every note and sync off (field-map FIX 8, 2026-10-01)."""
+    if os.getenv("SHAREPOINT_EXCEL_URL", "").strip():
+        return None
+    if os.getenv("SHAREPOINT_ITEM_ID", "").strip() and os.getenv("SHAREPOINT_DRIVE_ID", "").strip():
+        return None
+    return "SHAREPOINT_EXCEL_URL not configured (nor SHAREPOINT_ITEM_ID + SHAREPOINT_DRIVE_ID)"
+
+
+def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, replay=False):
     """Write note_text into Apollo's column on every weekly tab row for this
     matter. Prepends to whatever is already there, so history is never lost.
 
     Pass `kind` ("fso" / "adjustments") and the column is found per sheet by its
     HEADER TEXT — see APOLLO_KINDS. `col_letter` is the older, positional way and
     is kept for callers that still send one.
+
+    `replay` (Apollo's retry queue, 2026-10-01): the note is LATE — it failed
+    when it happened (the week's tab did not exist yet, or this service was
+    down) and newer lines may already sit in the cell. So it goes at the BOTTOM
+    of the cell and the cell keeps its colour; only an empty cell is painted.
+    Prepending and repainting would put e.g. a grey "SD forms received 07/09"
+    over a green "SD lodged 25/09" and tell the team the duty is not done.
     """
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
+    missing = _workbook_not_configured()
+    if missing:
+        return {"success": False, "error": missing}
 
     matter_num = str(matter_number or "").strip()
     note_text = str(note_text or "").strip()
@@ -1294,15 +1317,12 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
-                       "import", "ttb (2)", "invoices"}
         updated, errors, refused = [], [], []
 
-        for sheet in sheets:
-            if sheet.lower().strip() in skip_sheets:
-                continue
-            if "pexa check" in sheet.lower():
-                continue
+        # Weekly tabs ONLY (a name that is a date range) — never PEXA CHECK,
+        # Import, TTB, Master Data, invoices or whatever helper tab the next
+        # monthly file brings. See _is_week_tab.
+        for sheet in _week_tabs(sheets):
             try:
                 # Values AND formulas in the one read — the formula guard below
                 # needs no extra Graph call.
@@ -1358,12 +1378,18 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
                     existing = ""
                     if sheet_col_idx < len(values[ri]):
                         existing = str(values[ri][sheet_col_idx] or "").strip()
-                    new_value = f"{note_text}\n{existing}" if existing else note_text
+                    if replay and existing:
+                        # Late: under what is there, and the cell's colour stays.
+                        new_value = f"{existing}\n{note_text}"
+                        cell_fill = cell_font = None
+                    else:
+                        new_value = f"{note_text}\n{existing}" if existing else note_text
+                        cell_fill, cell_font = fill, font
 
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
-                                                   new_value, fill=fill, font=font)
+                                                   new_value, fill=cell_fill, font=cell_font)
                     updated.append(f"{sheet}!{target_cell}")
-                    logger.info(f"Apollo note: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
+                    logger.info(f"Apollo note{' (replay)' if replay else ''}: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:
                 errors.append(f"{sheet}: {sheet_err}")
 
@@ -1380,6 +1406,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
             "matter": matter_num,
             "column": col_letter,
             "note": note_text,
+            "replay": bool(replay),
             "updated": updated,
             "refused": refused,
             "errors": errors,
@@ -1478,10 +1505,13 @@ def api_adj_note():
     # `kind` ("fso" / "adjustments") is the way in: the column is found by its
     # header text, so the sheet can be reorganised without silently redirecting
     # Apollo. `column` is the older positional form, still accepted.
+    # `replay: true` — a late note from Apollo's retry queue: written under the
+    # cell's text, colour left alone (see _push_sheet_note).
     result = _push_sheet_note(
         data.get("matterNumber"), data.get("note"),
         col_letter=(None if data.get("kind") else (data.get("column") or ADJ_COL_LETTER)),
         kind=data.get("kind"),
+        replay=data.get("replay") is True,
     )
     if result.get("success"):
         return jsonify(result), 200
@@ -1492,7 +1522,9 @@ def api_adj_note():
         return jsonify(result), 409
     if err == "matter not found on any weekly tab":
         return jsonify(result), 404
-    if "is not writable by Apollo" in err or "required" in err:
+    # A bad request, not an outage: Apollo retries a 5xx, so an unknown kind
+    # must not answer 500 (it would be retried for a fortnight).
+    if "is not writable by Apollo" in err or "required" in err or err.startswith("unknown kind"):
         return jsonify(result), 400
     return jsonify(result), 500
 
@@ -1542,8 +1574,9 @@ def _fetch_possession_map():
 
 def _sync_possession(dry_run=False, only_sheet=None):
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
+    missing = _workbook_not_configured()
+    if missing:
+        return {"success": False, "error": missing}
 
     import re
     try:
@@ -1556,15 +1589,9 @@ def _sync_possession(dry_run=False, only_sheet=None):
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
-                       "import", "ttb (2)", "invoices"}
         tabs, errors = [], []
 
-        for sheet in sheets:
-            if sheet.lower().strip() in skip_sheets:
-                continue
-            if "pexa check" in sheet.lower():
-                continue
+        for sheet in _week_tabs(sheets):
             if only_sheet and sheet.strip().lower() != only_sheet.strip().lower():
                 continue
             try:
@@ -1765,8 +1792,9 @@ def _responsible_ours(mapping, people):
 
 def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
+    missing = _workbook_not_configured()
+    if missing:
+        return {"success": False, "error": missing}
 
     import re
     try:
@@ -1780,14 +1808,10 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
-                       "import", "ttb (2)", "invoices"}
         tabs, errors = [], []
         wanted = {n.lower() for n in RESPONSIBLE_HEADERS}
 
-        for sheet in sheets:
-            if sheet.lower().strip() in skip_sheets or "pexa check" in sheet.lower():
-                continue
+        for sheet in _week_tabs(sheets):
             if only_sheet and sheet.strip().lower() != only_sheet.strip().lower():
                 continue
             try:
@@ -1947,13 +1971,18 @@ def api_sheet_headers():
     column by name instead of by position."""
     import re
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 500
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        skip = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
-        want = [s for s in sheets if s.lower().strip() not in skip and "pexa check" not in s.lower()]
+        want = _week_tabs(sheets)
+        # Apollo's daily health check reads this: a workbook with no weekly tab
+        # at all (the wrong file, or a new month not set up) is a failure too.
+        if not want:
+            return jsonify({"success": False, "error": "no weekly tab in the workbook (tabs: %s)" % ", ".join(sheets[:30]),
+                            "sheets": []}), 500
         # One tab is enough to read the layout, and reading them all is what took
         # this 512MB instance down before.
         only = request.args.get("sheet")
@@ -2012,17 +2041,14 @@ def api_adj_note_recolour():
         return jsonify({"success": False, "error": "onlyIfFill (e.g. #A02B93) is required"}), 400
 
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 500
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
-                       "import", "ttb (2)", "invoices"}
         done, left = [], []
-        for sheet in sheets:
-            if sheet.lower().strip() in skip_sheets or "pexa check" in sheet.lower():
-                continue
+        for sheet in _week_tabs(sheets):
             try:
                 values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
                 if not values or len(values) < 2:
@@ -2073,18 +2099,15 @@ def api_adj_note_peek():
     col_idx = _col_index(col_letter)
 
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return jsonify({"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}), 500
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
 
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
-                       "import", "ttb (2)", "invoices"}
         rows = []
-        for sheet in sheets:
-            if sheet.lower().strip() in skip_sheets or "pexa check" in sheet.lower():
-                continue
+        for sheet in _week_tabs(sheets):
             try:
                 values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
                 if not values:
@@ -2119,6 +2142,40 @@ def api_adj_note_peek():
         return jsonify({"success": True, "matter": matter_num, "column": col_letter, "rows": rows})
     except Exception as e:
         logger.error(f"Adj peek failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/week-matters", methods=["GET"])
+def api_week_matters():
+    """GET — the matter numbers in column A of each weekly tab.
+
+    Read-only. Apollo's sheet-note replay tool asks this which matters a late
+    note could land on today (2026-10-01), instead of guessing from settlement
+    dates — matters sit on tabs outside their settlement week, and some matters
+    in a week are not on the sheet at all. Reads only A1:A600 of each weekly
+    tab (not the used range), so it is light on this single worker. Returns
+    numbers only — nothing else from the row."""
+    import re
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+        tabs, seen = [], []
+        for sheet in _week_tabs(sheets):
+            col = graph_client.get_excel_range(drive_id, item_id, sheet, "A1:A600")
+            nums = []
+            for row in col or []:
+                m = re.match(r"(\d{3,})(?!\d)", str((row or [""])[0] or "").strip())
+                if m and m.group(1) not in nums:
+                    nums.append(m.group(1))
+            tabs.append({"sheet": sheet, "matters": nums})
+            seen.extend(n for n in nums if n not in seen)
+        return jsonify({"success": True, "tabs": tabs, "matters": seen})
+    except Exception as e:
+        logger.error("week-matters failed: %s", e, exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2214,6 +2271,44 @@ def _week_key(name):
     return int(m.group(1)), start_m, int(m.group(3)), end_m
 
 
+# ---------------------------------------------------------------------------
+#  Which tabs Apollo may write (field-map FIX 5, Jai, 2026-10-01).
+#
+#  Every write — notes, Possession, Responsible — and the diagnostics used to
+#  walk every tab EXCEPT a hand-kept skip list (physicals, master data, mwsd,
+#  sheet1, sheet2, import, 'ttb (2)', invoices, anything 'pexa check'). Each
+#  monthly file brings helper tabs the list has never heard of — the October
+#  file has a plain 'TTB' — and a skip list is always one tab behind: a note
+#  could land on any of them whose column A happened to match. So the rule is
+#  turned round: ONLY a tab whose whole name is a week's date range is a
+#  weekly tab — '28 September - 2 October', '5 October - 9 October', '5-9 Oct',
+#  '28 Sep-2 Oct' (an optional trailing year is allowed). Never 'PEXA CHECK …'
+#  (its name carries the same dates), never a copy like '5 Oct - 9 Oct (2)',
+#  never 'Physicals 5-9 Oct'.
+# ---------------------------------------------------------------------------
+import re as _re_week
+_WEEK_TAB_RE = _re_week.compile(
+    r"(\d{1,2})\s*([A-Za-z]+)?\.?\s*-\s*(\d{1,2})\s*([A-Za-z]+)\.?(?:\s+\d{4})?")
+
+
+def _is_week_tab(name):
+    """True when the tab's whole name is a week's date range."""
+    s = str(name or "").strip()
+    if not s or "pexa check" in s.lower():
+        return False
+    m = _WEEK_TAB_RE.fullmatch(s)
+    if not m:
+        return False
+    end_m = m.group(4).lower()
+    start_m = (m.group(2) or m.group(4)).lower()
+    return start_m in _MONTH_MAP and end_m in _MONTH_MAP
+
+
+def _week_tabs(sheets):
+    """The weekly tabs of a workbook, in the workbook's order."""
+    return [s for s in (sheets or []) if _is_week_tab(s)]
+
+
 def _find_weekly_tab(sheets, tab):
     """The exact tab (ignoring case and outer spaces), else the ONE tab whose
     date range matches. None when nothing, or more than one, matches."""
@@ -2224,6 +2319,8 @@ def _find_weekly_tab(sheets, tab):
     key = _week_key(tab)
     if not key:
         return None
+    # Deliberately wider than _is_week_tab: a near-copy ('5 Oct - 9 Oct (2)')
+    # still counts here, so the repair refuses as ambiguous rather than guess.
     hits = [s for s in sheets if "pexa check" not in s.lower() and _week_key(s) == key]
     return hits[0] if len(hits) == 1 else None
 
@@ -2234,8 +2331,9 @@ def _repair_formula(tab, matter, dry=True):
     from collections import Counter
 
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}, 500
+    missing = _workbook_not_configured()
+    if missing:
+        return {"success": False, "error": missing}, 500
 
     drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
     sheets = graph_client.get_excel_worksheets(drive_id, item_id)
@@ -2243,7 +2341,7 @@ def _repair_formula(tab, matter, dry=True):
     if not sheet:
         return {"success": False, "error": f"no tab named '{tab}' (or more than one matching it)",
                 "tabs": sheets[:60]}, 404
-    if "pexa check" in sheet.lower() or sheet.lower().strip() in _PUSH_SKIP_SHEETS:
+    if not _is_week_tab(sheet):
         return {"success": False, "error": f"'{sheet}' is not a weekly tab"}, 400
 
     used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet, r1c1=True)
@@ -2478,22 +2576,14 @@ def _parse_tab_end_date(tab_name, ref_date=None):
     return candidate
 
 
-_PUSH_SKIP_SHEETS = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
-
-
 def _compute_push_max_date(sheets):
     """Given a list of worksheet names, return the latest weekly-tab end date,
-    or None if no parseable weekly tab is found. Excludes admin/reference and
-    PEXA CHECK tabs (same skip rules as _do_push_to_excel)."""
+    or None if no parseable weekly tab is found. Weekly tabs only
+    (_is_week_tab)."""
     max_date = None
     max_tab = None
     ref = _now_sydney()
-    for sheet in sheets:
-        s_lower = sheet.lower().strip()
-        if s_lower in _PUSH_SKIP_SHEETS:
-            continue
-        if "pexa check" in s_lower:
-            continue
+    for sheet in _week_tabs(sheets):
         end = _parse_tab_end_date(sheet, ref_date=ref)
         if end is None:
             continue

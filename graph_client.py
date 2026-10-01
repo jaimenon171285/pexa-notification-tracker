@@ -328,6 +328,14 @@ class GraphClient:
         # spreadsheet moves to a new file each month). SHAREPOINT_ITEM_ID wins
         # over the sharing link; the drive comes from SHAREPOINT_DRIVE_ID, else
         # from the sharing link (the library does not change).
+        #
+        # SHAREPOINT_EXCEL_URL: with SHAREPOINT_ITEM_ID AND SHAREPOINT_DRIVE_ID
+        # both set it is not needed (app._workbook_not_configured, 2026-10-01).
+        # With only SHAREPOINT_ITEM_ID set it MUST stay non-empty — the drive
+        # is then read from it — and the retired auto-push still checks it. The
+        # simplest rule on Render: leave it set, change SHAREPOINT_ITEM_ID each
+        # month, then "Save, rebuild, and deploy" (the ids are cached below for
+        # the life of the process).
         env_item = os.getenv("SHAREPOINT_ITEM_ID", "").strip()
         if env_item:
             env_drive = os.getenv("SHAREPOINT_DRIVE_ID", "").strip()
