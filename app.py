@@ -1265,7 +1265,7 @@ def _workbook_not_configured():
     return "SHAREPOINT_EXCEL_URL not configured (nor SHAREPOINT_ITEM_ID + SHAREPOINT_DRIVE_ID)"
 
 
-def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, replay=False):
+def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, late=False):
     """Write note_text into Apollo's column on every weekly tab row for this
     matter. Prepends to whatever is already there, so history is never lost.
 
@@ -1273,12 +1273,13 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, repla
     HEADER TEXT — see APOLLO_KINDS. `col_letter` is the older, positional way and
     is kept for callers that still send one.
 
-    `replay` (Apollo's retry queue, 2026-10-01): the note is LATE — it failed
-    when it happened (the week's tab did not exist yet, or this service was
-    down) and newer lines may already sit in the cell. So it goes at the BOTTOM
-    of the cell and the cell keeps its colour; only an empty cell is painted.
+    `late` (Apollo's retry queue, 2026-10-01): the note failed when it happened
+    (the week's tab did not exist yet, or this service was down) and Apollo has
+    since written a NEWER note into the same cell. So it goes at the BOTTOM of
+    the cell and the cell keeps its colour; only an empty cell is painted.
     Prepending and repainting would put e.g. a grey "SD forms received 07/09"
-    over a green "SD lodged 25/09" and tell the team the duty is not done.
+    over a green "SD lodged 25/09" and tell the team the duty is not done. A
+    replayed note with nothing newer in the cell is written like any other.
     """
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     missing = _workbook_not_configured()
@@ -1378,7 +1379,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, repla
                     existing = ""
                     if sheet_col_idx < len(values[ri]):
                         existing = str(values[ri][sheet_col_idx] or "").strip()
-                    if replay and existing:
+                    if late and existing:
                         # Late: under what is there, and the cell's colour stays.
                         new_value = f"{existing}\n{note_text}"
                         cell_fill = cell_font = None
@@ -1389,7 +1390,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, repla
                     graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell,
                                                    new_value, fill=cell_fill, font=cell_font)
                     updated.append(f"{sheet}!{target_cell}")
-                    logger.info(f"Apollo note{' (replay)' if replay else ''}: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
+                    logger.info(f"Apollo note{' (late)' if late else ''}: {sheet}!{target_cell} for matter {matter_num}: {note_text}")
             except Exception as sheet_err:
                 errors.append(f"{sheet}: {sheet_err}")
 
@@ -1406,7 +1407,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, repla
             "matter": matter_num,
             "column": col_letter,
             "note": note_text,
-            "replay": bool(replay),
+            "late": bool(late),
             "updated": updated,
             "refused": refused,
             "errors": errors,
@@ -1505,13 +1506,13 @@ def api_adj_note():
     # `kind` ("fso" / "adjustments") is the way in: the column is found by its
     # header text, so the sheet can be reorganised without silently redirecting
     # Apollo. `column` is the older positional form, still accepted.
-    # `replay: true` — a late note from Apollo's retry queue: written under the
-    # cell's text, colour left alone (see _push_sheet_note).
+    # `late: true` — a replayed note older than what Apollo has already put in
+    # the cell: written under the text, colour left alone (_push_sheet_note).
     result = _push_sheet_note(
         data.get("matterNumber"), data.get("note"),
         col_letter=(None if data.get("kind") else (data.get("column") or ADJ_COL_LETTER)),
         kind=data.get("kind"),
-        replay=data.get("replay") is True,
+        late=data.get("late") is True,
     )
     if result.get("success"):
         return jsonify(result), 200

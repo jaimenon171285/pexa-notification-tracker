@@ -1,4 +1,4 @@
-"""Offline tests for field-map FIX 5 and FIX 8 and the replay mode (2026-10-01).
+"""Offline tests for field-map FIX 5 and FIX 8 and late notes (2026-10-01).
 
   - Apollo writes ONLY to weekly tabs: a tab whose whole name is a week's date
     range. Never 'PEXA CHECK …', Import, TTB, Master Data, invoices, MWSD, a copy
@@ -7,7 +7,7 @@
     sheet-headers and the recolour endpoint.
   - /api/week-matters: the matter numbers on each weekly tab (Apollo's replay
     tool asks it which matters a late note can land on).
-  - replay=True: a late note goes UNDER the cell's text and the cell keeps its
+  - late=True: a late note goes UNDER the cell's text and the cell keeps its
     colour (an empty cell is written and painted as usual).
   - FIX 8: SHAREPOINT_ITEM_ID + SHAREPOINT_DRIVE_ID are enough on their own —
     an empty SHAREPOINT_EXCEL_URL no longer switches everything off.
@@ -207,40 +207,41 @@ class WeekMatters(unittest.TestCase):
         self.assertEqual(fake.writes, [])
 
 
-class ReplayMode(unittest.TestCase):
+class LateNotes(unittest.TestCase):
     def test_late_note_goes_under_and_keeps_the_colour(self):
         fake = install({"5 October - 9 October": tab({"colA": "90140 PURCHASE", "fso": "FSO sent 30/09 (From apollo)"})})
-        out = tracker._push_sheet_note("90140", "FSO sent 21/09 (From apollo)", kind="fso", replay=True)
+        out = tracker._push_sheet_note("90140", "FSO sent 21/09 (From apollo)", kind="fso", late=True)
         self.assertTrue(out["success"], out)
-        self.assertTrue(out["replay"])
+        self.assertTrue(out["late"])
         self.assertEqual(fake.writes, [("cell", "5 October - 9 October", "J2",
                                         "FSO sent 30/09 (From apollo)\nFSO sent 21/09 (From apollo)")])
         self.assertNotIn("J2", fake.tabs["5 October - 9 October"].fill)   # colour untouched
 
     def test_late_note_into_an_empty_cell_is_painted(self):
         fake = install({"5 October - 9 October": tab({"colA": "90141 PURCHASE"})})
-        tracker._push_sheet_note("90141", "FSO sent 21/09 (From apollo)", kind="fso", replay=True)
+        tracker._push_sheet_note("90141", "FSO sent 21/09 (From apollo)", kind="fso", late=True)
         self.assertEqual(fake.writes[0][3], "FSO sent 21/09 (From apollo)")
         self.assertEqual(fake.tabs["5 October - 9 October"].fill["J2"], tracker.APOLLO_KINDS["fso"]["fill"])
 
     def test_live_note_still_prepends_and_paints(self):
         fake = install({"5 October - 9 October": tab({"colA": "90142 PURCHASE", "fso": "older"})})
-        tracker._push_sheet_note("90142", "newer", kind="fso")
+        out = tracker._push_sheet_note("90142", "newer", kind="fso")
+        self.assertFalse(out["late"])
         self.assertEqual(fake.writes[0][3], "newer\nolder")
         self.assertIn("J2", fake.tabs["5 October - 9 October"].fill)
 
-    def test_endpoint_takes_replay_true_only(self):
+    def test_endpoint_takes_late_true_only(self):
         c = tracker.app.test_client()
         fake = install({"5 October - 9 October": tab({"colA": "90143 PURCHASE", "fso": "older"})})
-        c.post("/api/adj-note", json={"matterNumber": "90143", "note": "late", "kind": "fso", "replay": True})
+        c.post("/api/adj-note", json={"matterNumber": "90143", "note": "late", "kind": "fso", "late": True})
         self.assertEqual(fake.writes[0][3], "older\nlate")
         fake = install({"5 October - 9 October": tab({"colA": "90144 PURCHASE", "fso": "older"})})
-        c.post("/api/adj-note", json={"matterNumber": "90144", "note": "live", "kind": "fso", "replay": "yes"})
-        self.assertEqual(fake.writes[0][3], "live\nolder")             # only a real true is a replay
+        c.post("/api/adj-note", json={"matterNumber": "90144", "note": "live", "kind": "fso", "late": "yes"})
+        self.assertEqual(fake.writes[0][3], "live\nolder")             # only a real true is late
 
-    def test_formula_guard_still_wins_on_replay(self):
+    def test_formula_guard_still_wins_on_a_late_note(self):
         fake = install({"5 October - 9 October": tab({"colA": "90145 PURCHASE"})})
-        out = tracker._push_sheet_note("90145", "TTB late", kind="ttb", replay=True)
+        out = tracker._push_sheet_note("90145", "TTB late", kind="ttb", late=True)
         self.assertEqual(out["code"], "formula_cell")
         self.assertEqual(fake.writes, [])
 
