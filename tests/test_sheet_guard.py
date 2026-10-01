@@ -407,6 +407,29 @@ class RepairFormula(unittest.TestCase):
         self.assertEqual(r.status_code, 409)
         self.assertEqual(self.fake.writes, [])
 
+    def test_unanimous_dry_run_says_so(self):
+        d = self.post({"tab": self.TAB, "matter": "90051", "token": "test-token"}).get_json()
+        self.assertEqual(d["healthyRows"], 3)
+        self.assertEqual(d["rowsWithThisFormula"], d["healthyRows"])
+
+    def test_a_majority_is_not_enough(self):
+        # 2 healthy rows agree, 1 points at a stale 'TTB (2)' tab: refuse, dry AND real.
+        sh = self.fake.tabs[self.TAB]
+        stale = TTB_R1C1.replace("TTB!", "'TTB (2)'!")
+        sh.r1c1[4][8] = stale
+        sh.formulas[4][8] = ttb_a1(5).replace("TTB!", "'TTB (2)'!")
+        tok = "test-token"
+        for dry in (True, False):
+            r = self.post({"tab": self.TAB, "matter": "90051", "token": tok, "dry": dry})
+            d = r.get_json()
+            self.assertEqual(r.status_code, 409, d)
+            self.assertFalse(d["success"])
+            self.assertNotIn("writeR1C1", d)
+            self.assertEqual(d["healthyRows"], 3)
+            self.assertEqual(sorted((v["r1c1"], v["rows"], tuple(v["cells"])) for v in d["variants"]),
+                             sorted([(TTB_R1C1, 2, ("I2", "I4")), (stale, 1, ("I5",))]))
+        self.assertEqual(self.fake.writes, [])
+
     def test_matter_twice_on_the_tab_is_refused(self):
         sh = self.fake.tabs[self.TAB]
         sh.values[4][0] = sh.formulas[4][0] = sh.r1c1[4][0] = "90051 PURCHASE (2)"

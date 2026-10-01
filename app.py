@@ -2133,9 +2133,11 @@ def api_adj_note_peek():
 #  so the reference to the row's own column A lands on THIS row, not the donor's.
 #
 #  Narrow on purpose: one column (found by its "TTB Check" header), one matter,
-#  one tab per call; dry run unless {"dry": false}; refuses when the healthy
-#  rows disagree on the formula, when the cell already holds a formula, or when
-#  the matter is on the tab more than once. The real run reads the cell back.
+#  one tab per call; dry run unless {"dry": false}; refuses (409, dry or real)
+#  unless EVERY healthy row holds the same R1C1 formula — a majority is not
+#  enough, the answer lists each variant and its cells — and refuses when the
+#  matter is on the tab more than once. A cell that already holds a formula is
+#  left alone. The real run reads the cell back.
 # ---------------------------------------------------------------------------
 REPAIR_FORMULA_HEADERS = ["ttb check"]
 
@@ -2307,10 +2309,18 @@ def _repair_formula(tab, matter, dry=True):
     if not donors:
         return {"success": False, "error": f"no healthy {letter} formula on '{sheet}' to copy from"}, 409
     counts = Counter(f for _, f in donors)
+    # Unanimous or nothing: ONE healthy row with a different formula (say one
+    # pointing at 'TTB (2)') means nobody can tell from here which one is
+    # right, so a majority is NOT enough — refuse, dry or real, and show every
+    # variant with the cells that hold it so a person can decide.
+    if len(counts) > 1:
+        return {"success": False, "dry": dry, "tab": sheet, "matter": matter, "cell": cell,
+                "error": "the healthy rows do not agree on one formula - repair by hand",
+                "healthyRows": len(donors),
+                "variants": [{"r1c1": f, "rows": n,
+                              "cells": [f"{letter}{start_row + rj}" for rj, g in donors if g == f][:10]}
+                             for f, n in counts.most_common()]}, 409
     best, same = counts.most_common(1)[0]
-    if same * 2 <= len(donors):
-        return {"success": False, "error": "the healthy rows do not agree on one formula - repair by hand",
-                "variants": [{"r1c1": f, "rows": n} for f, n in counts.most_common(5)]}, 409
     donor_ri = min((rj for rj, f in donors if f == best), key=lambda rj: abs(rj - ri))
     donor_cell = f"{letter}{start_row + donor_ri}"
 
