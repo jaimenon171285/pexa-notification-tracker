@@ -294,132 +294,10 @@ async function bulkAction(action) {
     await refreshAll();
 }
 
-function pushToExcel() {
-    if (state.selectedIds.size === 0) {
-        showToast("Please select the tickets you want to push to the spreadsheet", "error");
-        return;
-    }
-
-    const selectedNotifs = state.notifications.filter(n => state.selectedIds.has(n.id));
-    state.excelPushIds = Array.from(state.selectedIds);
-
-    const modal = document.getElementById("reminder-modal");
-    const taskList = selectedNotifs.slice(0, 15).map(n =>
-        `<li><strong>${escapeHtml(n.matter_number)}</strong> — ${escapeHtml(n.notification_type)} — ${escapeHtml(formatSettlementDateOnly(n.settlement_date))}</li>`
-    ).join("");
-    const moreText = selectedNotifs.length > 15 ? `<p style="color:#888;font-size:13px">...and ${selectedNotifs.length - 15} more</p>` : "";
-
-    modal.innerHTML = `
-        <div class="modal-backdrop" onclick="closeExcelModal()"></div>
-        <div class="modal-content" style="max-width:550px">
-            <div class="modal-header" style="background:#1a7a3a">
-                <h3 style="color:white">Push to Spreadsheet?</h3>
-                <button class="modal-close" onclick="closeExcelModal()" style="color:white">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p style="font-size:15px;font-weight:bold;color:#1a7a3a">Push ${selectedNotifs.length} notification(s) to the shared Excel spreadsheet?</p>
-                <p>This will find the matching matter numbers across all tabs and update the PEXA Notes column (G):</p>
-                <ul style="max-height:250px;overflow-y:auto;font-size:13px;line-height:1.6">${taskList}</ul>
-                ${moreText}
-            </div>
-            <div class="modal-footer">
-                <button class="btn btn-dismiss" onclick="closeExcelModal()">Cancel</button>
-                <button class="btn btn-send" id="btn-confirm-excel" onclick="executePushToExcel()" style="background:#1a7a3a">Yes, Push to Spreadsheet</button>
-            </div>
-        </div>`;
-    modal.classList.add("open");
-}
-
-function closeExcelModal() {
-    const modal = document.getElementById("reminder-modal");
-    modal.classList.remove("open");
-    modal.innerHTML = "";
-    state.excelPushIds = null;
-}
-
-async function executePushToExcel() {
-    const btn = document.getElementById("btn-confirm-excel");
-    btn.disabled = true;
-    btn.textContent = "Pushing...";
-    const idsToSend = state.excelPushIds ? [...state.excelPushIds] : [];
-    closeExcelModal();
-
-    // Step 1: Mark complete FIRST (instant) so tickets leave the view
-    for (const nid of idsToSend) {
-        try {
-            await fetch(`/api/notifications/${nid}/status`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ status: "actioned", user: state.currentUser }),
-            });
-        } catch (e) { /* continue */ }
-    }
-    state.selectedIds.clear();
-    showToast(`Marked ${idsToSend.length} ticket(s) complete. Pushing to spreadsheet in background...`, "success");
-    await refreshAll();
-
-    // Step 2: Queue the push on the backend (runs in server thread, survives tab close)
-    try {
-        const resp = await fetch("/api/push-to-excel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: idsToSend, skip_complete: true, async_mode: true }),
-        });
-        const data = await resp.json();
-        if (data.success) {
-            showToast(data.message || `Queued ${data.count} for background push`, "success");
-        } else {
-            showToast(`Queue failed: ${data.error || "Unknown error"}`, "error");
-        }
-    } catch (e) {
-        showToast(`Queue error: ${e.message}`, "error");
-    }
-
-    state.excelPushIds = null;
-}
-
-async function pushSingleToExcel(id) {
-    const n = state.notifications.find(x => x.id === id);
-    if (!n) return;
-
-    // Find next ticket for auto-expand
-    let nextId = null;
-    if (state.expandedId === id && state.visibleIds) {
-        const idx = state.visibleIds.indexOf(id);
-        if (idx >= 0 && idx < state.visibleIds.length - 1) {
-            nextId = state.visibleIds[idx + 1];
-        }
-    }
-
-    // Step 1: Mark complete FIRST (instant)
-    await fetch(`/api/notifications/${id}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "actioned", user: state.currentUser }),
-    });
-    showToast("Marked complete. Pushing to spreadsheet in background...", "success");
-
-    // Auto-expand next ticket
-    if (nextId !== null) state.expandedId = nextId;
-    await refreshAll();
-    if (nextId !== null) {
-        setTimeout(() => {
-            const el = document.getElementById(`detail-${nextId}`);
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 100);
-    }
-
-    // Step 2: Queue the push on backend (runs server-side in thread)
-    try {
-        await fetch("/api/push-to-excel", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ids: [id], skip_complete: true, async_mode: true }),
-        });
-    } catch (e) {
-        showToast(`Queue error: ${e.message}`, "error");
-    }
-}
+// "Push to Spreadsheet" (pushToExcel / executePushToExcel / pushSingleToExcel)
+// was removed on 2026-10-01: it wrote a "PEXA Notes" column that was deleted
+// from the workbook on 2026-08-23, and without that header the server INSERTED
+// a new column G on every weekly tab. /api/push-to-excel now answers 410.
 
 async function checkConnection() {
     try {
@@ -617,7 +495,6 @@ function renderDetail(n) {
                     ${n.status !== "actioned" ? `<button class="btn btn-action" onclick="event.stopPropagation(); updateStatus(${n.id}, 'actioned')">Mark Complete</button>` : ""}
                     ${n.status !== "dismissed" ? `<button class="btn btn-dismiss" onclick="event.stopPropagation(); updateStatus(${n.id}, 'dismissed')">Dismiss</button>` : ""}
                     ${n.status === "actioned" || n.status === "dismissed" ? `<button class="btn btn-reopen" onclick="event.stopPropagation(); updateStatus(${n.id}, 'new')">Reopen</button>` : ""}
-                    <button class="btn btn-bulk-excel" onclick="event.stopPropagation(); pushSingleToExcel(${n.id})">Push to Spreadsheet</button>
                 </div>
             </div>
             <div class="detail-section">

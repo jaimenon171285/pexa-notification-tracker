@@ -1019,235 +1019,28 @@ def _send_reminders_for_tasks(tasks):
             logger.error(f"Failed to send reminder for notification {task['id']}: {e}")
 
 
-# --- Push to SharePoint Excel ---
+# --- Push to SharePoint Excel: RETIRED (Jai, 2026-10-01) ---
+#
+# The old "Push to Spreadsheet" path wrote PEXA notifications into a "PEXA
+# Notes" column. That header was deleted from the workbook on 2026-08-23, and
+# when this code could not find it, it INSERTED a new column G on every weekly
+# tab — one click would have shifted SD and every column to its right across
+# the whole workbook. The buttons are gone from the dashboard, the endpoints
+# answer 410, and the column-inserting code is deleted rather than left to be
+# switched back on. Apollo's notes go through /api/adj-note (found by header,
+# formula-guarded) instead.
+PUSH_RETIRED_REASON = (
+    "Push to Spreadsheet is retired (2026-10-01): the PEXA Notes column it wrote "
+    "to was deleted on 2026-08-23, and without it this push inserted a new "
+    "column G on every weekly tab. Apollo writes the sheet through /api/adj-note."
+)
+
 
 def _do_push_to_excel(ids, skip_complete=False, auto_push=False):
-    """Core push logic — runs in a thread for background mode. Returns dict with results.
-
-    When auto_push=True, the cell text is prefixed with '* ' so auto-pushed entries
-    can be visually distinguished from manually-pushed ones in the spreadsheet."""
-    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
-    if not sharepoint_url:
-        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}
-
-    try:
-        # Resolve the SharePoint file
-        drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
-
-        # Get all worksheet names
-        sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        logger.info(f"Excel sheets: {sheets}")
-
-        # Skip non-weekly sheets
-        skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2", "import", "ttb (2)", "invoices"}
-
-        # Cache sheet contents so we only fetch each sheet once per batch
-        sheet_cache = {}
-
-        # Gather notifications to push
-        updated = []
-        errors = []
-
-        for nid in ids:
-            n = get_notification(nid)
-            if not n:
-                errors.append(f"ID {nid}: not found")
-                continue
-
-            matter_num = n.get("matter_number", "").strip()
-            ntype = n.get("notification_type", "PEXA Notification")
-            received = n.get("received_at", "")
-            full_body = n.get("full_body", "") or ""
-
-            # Extract the actual PEXA message content
-            subject_line = n.get("subject", "") or ""
-            pexa_message = _extract_pexa_message(full_body, notification_type=ntype, subject=subject_line)
-
-            # Format the note: actual message + type + date
-            try:
-                from datetime import datetime as _dt
-                dt = _dt.fromisoformat(received.replace("Z", "+00:00"))
-                date_str = dt.strftime("%d/%m/%Y %H:%M")
-            except Exception:
-                date_str = received[:16] if received else "Unknown"
-
-            if pexa_message:
-                note_text = f"{pexa_message} ({ntype} - {date_str})"
-            else:
-                note_text = f"{ntype} - {date_str}"
-
-            if auto_push:
-                note_text = f"* {note_text}"
-
-            # Search across weekly sheets for this matter number
-            found = False
-            for sheet in sheets:
-                if sheet.lower().strip() in skip_sheets:
-                    continue
-                if "pexa check" in sheet.lower():
-                    continue
-
-                try:
-                    if sheet in sheet_cache:
-                        values, address = sheet_cache[sheet]
-                    else:
-                        values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
-                        sheet_cache[sheet] = (values, address)
-                    if not values or len(values) < 2:
-                        continue
-
-                    # Find "PEXA Notes" column by scanning ALL columns in header rows
-                    PEXA_COL = None  # Will be set to the column index where "PEXA Notes" is found
-                    DEFAULT_COL = 6  # Column G = index 6 (for inserting if not found)
-                    DEFAULT_COL_LETTER = "G"
-                    pexa_header_exists = False
-                    header_row_idx = None
-
-                    for ri in range(min(15, len(values))):
-                        for ci in range(len(values[ri])):
-                            cell_val = str(values[ri][ci] or "").strip().lower()
-                            # Find the header row (contains settlement, adjustments, etc.)
-                            if cell_val in ("settlement", "settlement date", "jurisdiction", "adjustments"):
-                                header_row_idx = ri
-                            # Check if this cell is PEXA Notes
-                            if cell_val in ("pexa notes", "pexa note"):
-                                pexa_header_exists = True
-                                PEXA_COL = ci
-                                header_row_idx = ri
-                                break
-                        if pexa_header_exists:
-                            break
-
-                    # Convert column index to letter for cell references
-                    def _col_letter(idx):
-                        """Convert 0-based column index to Excel column letter (0=A, 6=G, 26=AA)."""
-                        result = ""
-                        while True:
-                            result = chr(65 + idx % 26) + result
-                            idx = idx // 26 - 1
-                            if idx < 0:
-                                break
-                        return result
-
-                    if PEXA_COL is not None:
-                        PEXA_COL_LETTER = _col_letter(PEXA_COL)
-                    else:
-                        PEXA_COL = DEFAULT_COL
-                        PEXA_COL_LETTER = DEFAULT_COL_LETTER
-
-                    # If no PEXA Notes column found anywhere, insert one at column G
-                    if not pexa_header_exists:
-                        try:
-                            graph_client.insert_excel_column(drive_id, item_id, sheet, DEFAULT_COL_LETTER)
-                            PEXA_COL = DEFAULT_COL
-                            PEXA_COL_LETTER = DEFAULT_COL_LETTER
-                            logger.info(f"Inserted new column {DEFAULT_COL_LETTER} in sheet '{sheet}'")
-
-                            # Set the header
-                            if header_row_idx is not None:
-                                range_start_row_for_header = 1
-                                if address and "!" in address:
-                                    range_part = address.split("!")[1]
-                                    import re as _re
-                                    m = _re.match(r"[A-Z]+(\d+)", range_part)
-                                    if m:
-                                        range_start_row_for_header = int(m.group(1))
-                                header_excel_row = range_start_row_for_header + header_row_idx
-                            else:
-                                header_excel_row = 1
-                            graph_client.update_excel_cell(drive_id, item_id, sheet, f"{PEXA_COL_LETTER}{header_excel_row}", "PEXA Notes")
-                            logger.info(f"Added 'PEXA Notes' header at {sheet}!{PEXA_COL_LETTER}{header_excel_row}")
-
-                            # Re-read the used range since columns shifted and update cache
-                            values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
-                            sheet_cache[sheet] = (values, address)
-                        except Exception as ins_err:
-                            logger.warning(f"Could not insert column G in '{sheet}': {ins_err}")
-                            # Fall back — column G might already exist from a previous run
-                            pass
-
-                    # Search column A for the matter number
-                    for ri in range(len(values)):
-                        cell_val = str(values[ri][0] or "").strip()
-                        # Match: "71263 PURCHASE" starts with "71263"
-                        if cell_val and cell_val.startswith(matter_num):
-                            found = True
-                            range_start_row = 1
-                            if address and "!" in address:
-                                range_part = address.split("!")[1]
-                                import re
-                                match = re.match(r"[A-Z]+(\d+)", range_part)
-                                if match:
-                                    range_start_row = int(match.group(1))
-
-                            excel_row = range_start_row + ri
-                            target_cell = f"{PEXA_COL_LETTER}{excel_row}"
-
-                            # Read existing value to append (don't overwrite)
-                            existing = ""
-                            if PEXA_COL < len(values[ri]):
-                                existing = str(values[ri][PEXA_COL] or "").strip()
-
-                            if existing and existing.lower() != "pexa notes":
-                                new_value = f"{note_text}\n{existing}"
-                            else:
-                                new_value = note_text
-
-                            graph_client.update_excel_cell(drive_id, item_id, sheet, target_cell, new_value)
-                            updated.append(f"Matter {matter_num} in '{sheet}' ({target_cell})")
-                            logger.info(f"Updated {sheet}!{target_cell} for matter {matter_num}: {note_text}")
-
-                            # Update the cache so subsequent tickets for the same matter see the new value
-                            try:
-                                # Ensure row has enough columns
-                                while len(values[ri]) <= PEXA_COL:
-                                    values[ri].append("")
-                                values[ri][PEXA_COL] = new_value
-                                sheet_cache[sheet] = (values, address)
-                            except Exception:
-                                pass
-
-                            add_note(nid, f"Pushed to spreadsheet: {sheet}!{target_cell}", "System")
-                            break
-
-                except Exception as e:
-                    logger.warning(f"Error scanning sheet '{sheet}': {e}")
-                    continue
-
-                if found:
-                    break
-
-            if not found:
-                errors.append(f"Matter {matter_num}: not found in any sheet")
-
-        # Auto-mark successfully pushed tickets as complete (unless frontend already did it)
-        if not skip_complete:
-            for nid in ids:
-                try:
-                    n = get_notification(nid)
-                    if n and n["status"] != "actioned":
-                        update_notification_status(nid, "actioned", user="Push to Spreadsheet")
-                        add_note(nid, "Auto-marked complete after pushing to spreadsheet", "System")
-                except Exception as e:
-                    logger.warning(f"Failed to auto-complete notification {nid}: {e}")
-
-        msg_parts = []
-        if updated:
-            msg_parts.append(f"Updated {len(updated)} matter(s) in spreadsheet")
-        if errors:
-            msg_parts.append(f"{len(errors)} not found")
-
-        return {
-            "success": True,
-            "count": len(updated),
-            "updated": updated,
-            "errors": errors,
-            "message": ". ".join(msg_parts) or "No updates made",
-        }
-
-    except Exception as e:
-        logger.error(f"Push to Excel failed: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+    """Retired — see PUSH_RETIRED_REASON. Writes nothing, inserts nothing."""
+    logger.warning("Push to Spreadsheet called but retired (%d id(s)) - nothing written",
+                   len(ids or []))
+    return {"success": False, "retired": True, "error": PUSH_RETIRED_REASON}
 
 
 # --- Adjustment notes from Apollo (the PE Portal) -------------------------------
@@ -1417,6 +1210,46 @@ def _col_index(col_letter):
     return ord(col_letter.upper()) - ord("A")
 
 
+# ---------------------------------------------------------------------------
+#  The formula guard (Jai, 2026-10-01: "go for it").
+#
+#  Apollo's TTB note was matched to the "TTB Check" header and written into
+#  it — but that column is the team's =IF(ISNUMBER(MATCH(...TTB!G:G...)),
+#  "YES","NO") formula. The note read the cell's DISPLAYED value ("YES"),
+#  prepended its line and wrote the lot back as plain text, so the formula was
+#  gone and the cell could never turn to NO again (75680, 74745, 70149, 75874,
+#  75785). Matching by header cannot prevent that: the header was right, the
+#  cell was a formula.
+#
+#  So nothing Apollo-driven writes into a cell holding a formula — notes,
+#  Possession, Responsible. The formulas come back in the same usedRange read
+#  as the values (no extra Graph call), and a refused cell is reported, never
+#  quietly skipped. Apollo treats this refusal as final and does not retry.
+# ---------------------------------------------------------------------------
+FORMULA_REFUSED = "formula cell — not written"
+
+
+def _is_formula_cell(formulas, ri, ci):
+    """True when the used range's `formulas` says row ri, column ci holds a
+    formula. For a constant cell Graph returns the value itself; a number or an
+    empty string is never a formula."""
+    try:
+        f = formulas[ri][ci]
+    except (IndexError, TypeError):
+        return False
+    return isinstance(f, str) and f.lstrip().startswith("=")
+
+
+def _range_start_row(address):
+    """First row number of a used-range address like "'28 Sep-2 Oct'!A1:S400"."""
+    import re
+    if address and "!" in address:
+        m = re.match(r"\$?[A-Z]+\$?(\d+)", address.split("!")[-1])
+        if m:
+            return int(m.group(1))
+    return 1
+
+
 def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
     """Write note_text into Apollo's column on every weekly tab row for this
     matter. Prepends to whatever is already there, so history is never lost.
@@ -1463,7 +1296,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
         skip_sheets = {"physicals", "master data", "mwsd", "sheet1", "sheet2",
                        "import", "ttb (2)", "invoices"}
-        updated, errors = [], []
+        updated, errors, refused = [], [], []
 
         for sheet in sheets:
             if sheet.lower().strip() in skip_sheets:
@@ -1471,7 +1304,10 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
             if "pexa check" in sheet.lower():
                 continue
             try:
-                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                # Values AND formulas in the one read — the formula guard below
+                # needs no extra Graph call.
+                used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet)
+                values, formulas, address = used["values"], used["formulas"], used["address"]
                 if not values or len(values) < 2:
                     continue
 
@@ -1509,6 +1345,16 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
                     excel_row = range_start_row + ri
                     target_cell = f"{sheet_col_letter}{excel_row}"
 
+                    # The formula guard: a cell holding a formula is the team's
+                    # (a lookup, a YES/NO check). Writing a note into it turns
+                    # the formula into frozen text — refuse, and say so.
+                    if _is_formula_cell(formulas, ri, sheet_col_idx):
+                        refused.append(f"{sheet}!{target_cell}")
+                        errors.append(f"{sheet}!{target_cell}: {FORMULA_REFUSED}")
+                        logger.warning(f"Apollo note REFUSED: {sheet}!{target_cell} holds a formula "
+                                       f"(matter {matter_num}, kind {kind or col_letter})")
+                        continue
+
                     existing = ""
                     if sheet_col_idx < len(values[ri]):
                         existing = str(values[ri][sheet_col_idx] or "").strip()
@@ -1521,14 +1367,24 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None):
             except Exception as sheet_err:
                 errors.append(f"{sheet}: {sheet_err}")
 
+        # Nothing written because every row found was a formula cell: that is a
+        # refusal, not "not found" — Apollo must not queue it to try again.
+        if updated:
+            error, code = None, None
+        elif refused:
+            error, code = FORMULA_REFUSED, "formula_cell"
+        else:
+            error, code = "matter not found on any weekly tab", None
         return {
             "success": bool(updated),
             "matter": matter_num,
             "column": col_letter,
             "note": note_text,
             "updated": updated,
+            "refused": refused,
             "errors": errors,
-            "error": None if updated else "matter not found on any weekly tab",
+            "error": error,
+            "code": code,
         }
     except Exception as e:
         logger.error(f"Apollo note push failed: {e}", exc_info=True)
@@ -1630,6 +1486,10 @@ def api_adj_note():
     if result.get("success"):
         return jsonify(result), 200
     err = result.get("error") or ""
+    if result.get("code") == "formula_cell":
+        # 409: the request was fine, the cell is the team's formula. Final —
+        # Apollo records it and does not retry.
+        return jsonify(result), 409
     if err == "matter not found on any weekly tab":
         return jsonify(result), 404
     if "is not writable by Apollo" in err or "required" in err:
@@ -1708,7 +1568,8 @@ def _sync_possession(dry_run=False, only_sheet=None):
             if only_sheet and sheet.strip().lower() != only_sheet.strip().lower():
                 continue
             try:
-                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet)
+                values, formulas, address = used["values"], used["formulas"], used["address"]
                 if not values or len(values) < 2:
                     continue
 
@@ -1734,7 +1595,7 @@ def _sync_possession(dry_run=False, only_sheet=None):
                         range_start_row = int(m.group(1))
 
                 letter = _col_letter(hc)
-                changed, kept, unknown = [], [], 0
+                changed, kept, unknown, formula_cells = [], [], 0, []
                 for ri in range(hr + 1, len(values)):
                     row = values[ri]
                     existing = str(row[hc] or "").strip() if hc < len(row) else ""
@@ -1745,6 +1606,9 @@ def _sync_possession(dry_run=False, only_sheet=None):
                     if not want:
                         if m:
                             unknown += 1
+                    elif _is_formula_cell(formulas, ri, hc):
+                        # The formula guard — never write over a formula.
+                        formula_cells.append("%s%d" % (letter, range_start_row + ri))
                     elif existing and existing.lower() not in POSSESSION_OURS:
                         # Someone typed their own note here. Theirs wins.
                         kept.append("%s%d=%s" % (letter, range_start_row + ri, existing))
@@ -1800,6 +1664,7 @@ def _sync_possession(dry_run=False, only_sheet=None):
                     "written": len(changed),
                     "values": sorted({w for _, w in changed}),
                     "left_alone_human": kept,
+                    "formula_cells_not_written": formula_cells,
                     "no_answer_from_apollo": unknown,
                 })
             except Exception as sheet_err:
@@ -1844,26 +1709,58 @@ def api_possession_sync():
 #  so the column reads the way each person already shades their cells.
 #
 #  Same rules as Possession above: found by HEADER; a matter Apollo does not
-#  answer for is left alone; a cell holding anything but one of Apollo's three
-#  names is someone's own note and is left alone and reported; only cells that
-#  change are written, in contiguous runs.
+#  answer for is left alone; a cell holding anything but one of Apollo's
+#  names (its `people` list, see _responsible_ours) is someone's own note and
+#  is left alone and reported; a formula cell is never written; only cells
+#  that change are written, in contiguous runs.
 # ---------------------------------------------------------------------------
 APOLLO_RESPONSIBLE_URL = os.getenv(
     "APOLLO_RESPONSIBLE_URL",
     "https://australia-southeast1-post-exchange-lw-platform.cloudfunctions.net/responsibleLookup",
 )
 RESPONSIBLE_HEADERS = ["responsible", "responsible person"]
+# The names this tracker always treats as Apollo's own. NOT the whole list any
+# more: Apollo sends its `people` with the lookup (below), so a person added
+# there is rewritable here without a tracker change. Before that, "Nate"
+# (transfers, 2026-09-26) was missing from this set: the first write landed,
+# and every hourly run after treated it as a human note — a transfer moved to
+# Sheriff or Zane in Apollo never changed on the sheet (Jai, 2026-10-01).
 RESPONSIBLE_OURS = {"zane", "thomas", "sheriff", ""}
 
 
 def _fetch_responsible_map():
-    """Ask Apollo. { "75318": {"value": "Zane", "fill": "#156082", "font": "#FFFFFF"}, ... }"""
+    """Ask Apollo. Returns (matters, people):
+        matters = { "75318": {"value": "Zane", "fill": "#156082", "font": "#FFFFFF"}, ... }
+        people  = ["Zane", "Thomas", "Sheriff", "Nate"]  — every name Apollo may write
+    `people` is empty from an Apollo that predates it; the sync copes."""
     token = os.getenv("FIREBASE_WORKSPACE_TOKEN", "") or APOLLO_INGEST_TOKEN
     if not token:
         raise RuntimeError("FIREBASE_WORKSPACE_TOKEN not set")
     r = requests.get(APOLLO_RESPONSIBLE_URL, params={"token": token}, timeout=90)
     r.raise_for_status()
-    return r.json().get("matters", {}) or {}
+    data = r.json() or {}
+    people = data.get("people") or []
+    if not isinstance(people, list):
+        people = []
+    return (data.get("matters", {}) or {}), people
+
+
+def _responsible_ours(mapping, people):
+    """Lower-cased names a Responsible cell may hold and still be Apollo's to
+    rewrite: the fixed set, every name in Apollo's `people`, and every name
+    Apollo is sending right now (each of those is one Apollo writes, so a cell
+    holding it was written by Apollo — this also covers an Apollo that has not
+    started sending `people` yet)."""
+    ours = set(RESPONSIBLE_OURS)
+    for p in people or []:
+        name = str(p or "").strip().lower()
+        if name:
+            ours.add(name)
+    for want in (mapping or {}).values():
+        name = str((want or {}).get("value") or "").strip().lower() if isinstance(want, dict) else ""
+        if name:
+            ours.add(name)
+    return ours
 
 
 def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
@@ -1873,11 +1770,12 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
 
     import re
     try:
-        mapping = _fetch_responsible_map()
+        mapping, people = _fetch_responsible_map()
     except Exception as e:
         return {"success": False, "error": "could not reach Apollo: %s" % e}
     if not mapping:
         return {"success": False, "error": "Apollo returned no responsible data"}
+    ours = _responsible_ours(mapping, people)
 
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
@@ -1893,7 +1791,8 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
             if only_sheet and sheet.strip().lower() != only_sheet.strip().lower():
                 continue
             try:
-                values, address = graph_client.get_excel_used_range(drive_id, item_id, sheet)
+                used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet)
+                values, formulas, address = used["values"], used["formulas"], used["address"]
                 if not values or len(values) < 2:
                     continue
 
@@ -1916,7 +1815,7 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
                         range_start_row = int(m.group(1))
 
                 letter = _col_letter(hc)
-                changed, kept, unknown, repaint = [], [], 0, []
+                changed, kept, unknown, repaint, formula_cells = [], [], 0, [], []
                 for ri in range(hr + 1, len(values)):
                     row = values[ri]
                     existing = str(row[hc] or "").strip() if hc < len(row) else ""
@@ -1928,7 +1827,10 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
                     if not value:
                         if m:
                             unknown += 1
-                    elif existing and existing.lower() not in RESPONSIBLE_OURS:
+                    elif _is_formula_cell(formulas, ri, hc):
+                        # The formula guard — never write over (or repaint) a formula.
+                        formula_cells.append("%s%d" % (letter, range_start_row + ri))
+                    elif existing and existing.lower() not in ours:
                         kept.append("%s%d=%s" % (letter, range_start_row + ri, existing))
                     elif existing != value:
                         changed.append((range_start_row + ri, value, want.get("fill"), want.get("font")))
@@ -1985,6 +1887,7 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
                     "coloured": len(changed) + len(repaint),
                     "colour_runs": len(colour_runs),
                     "left_alone_human": kept,
+                    "formula_cells_not_written": formula_cells,
                     "no_answer_from_apollo": unknown,
                 })
             except Exception as sheet_err:
@@ -1994,6 +1897,7 @@ def _sync_responsible(dry_run=False, only_sheet=None, recolour=False):
             "success": True,
             "dry_run": dry_run,
             "apollo_knows": len(mapping),
+            "apollo_names": sorted(n for n in ours if n),
             "tabs": tabs,
             "total_written": sum(t["written"] for t in tabs),
             "errors": errors,
@@ -2218,95 +2122,286 @@ def api_adj_note_peek():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ---------------------------------------------------------------------------
+#  Formula repair — put the team's TTB Check formula back on a matter's row.
+#
+#  Apollo's TTB note turned the TTB Check formula into frozen text on five
+#  rows (75680, 74745, 70149, 75874 on 28 Sep-2 Oct; 75785 on 5-9 Oct) before
+#  the formula guard existed. dragdown skips hand-typed cells, so nothing would
+#  put them back. This copies the formula from a HEALTHY row of the same tab in
+#  R1C1 form — "=IF(ISNUMBER(MATCH(LEFT(TRIM(RC[-8]),5),TTB!C[-2],0)),...)" —
+#  so the reference to the row's own column A lands on THIS row, not the donor's.
+#
+#  Narrow on purpose: one column (found by its "TTB Check" header), one matter,
+#  one tab per call; dry run unless {"dry": false}; refuses when the healthy
+#  rows disagree on the formula, when the cell already holds a formula, or when
+#  the matter is on the tab more than once. The real run reads the cell back.
+# ---------------------------------------------------------------------------
+REPAIR_FORMULA_HEADERS = ["ttb check"]
+
+
+def _r1c1_to_a1(formula, row, col):
+    """Best-effort A1 reading of an R1C1 formula as it would sit in (row, col),
+    both 1-based. ONLY for the dry run's preview: the write itself is the R1C1
+    text, and the real run reports Excel's own A1 formula read back from the cell.
+    String literals and quoted sheet names are left untouched."""
+    import re
+    if not isinstance(formula, str):
+        return formula
+    token = re.compile(
+        r"(?<![A-Za-z0-9_.])"
+        r"(R(?:\[-?\d+\]|\d+)?)?"
+        r"(C(?:\[-?\d+\]|\d+)?)?"
+        r"(?![A-Za-z0-9_(\[])"
+    )
+
+    def part(spec, here):
+        """'R' / 'R[-2]' / 'R5' -> (number, is_absolute), relative to `here`."""
+        body = spec[1:]
+        if not body:
+            return here, False
+        if body.startswith("["):
+            return here + int(body[1:-1]), False
+        return int(body), True
+
+    def a1_col(n):
+        return _col_letter(n - 1)
+
+    def convert(seg):
+        def rep(m):
+            r, c = m.group(1), m.group(2)
+            if not r and not c:
+                return m.group(0)
+            s, e = m.start(), m.end()
+            in_range = (s > 0 and seg[s - 1] == ":") or (e < len(seg) and seg[e] == ":")
+            if r and c:
+                rn, rabs = part(r, row)
+                cn, cabs = part(c, col)
+                return f"{'$' if cabs else ''}{a1_col(cn)}{'$' if rabs else ''}{rn}"
+            if c:   # a whole column
+                cn, cabs = part(c, col)
+                one = f"{'$' if cabs else ''}{a1_col(cn)}"
+                return one if in_range else f"{one}:{one}"
+            rn, rabs = part(r, row)   # a whole row
+            one = f"{'$' if rabs else ''}{rn}"
+            return one if in_range else f"{one}:{one}"
+        return token.sub(rep, seg)
+
+    # Leave "string literals" and 'quoted sheet names' exactly as they are.
+    out, i = [], 0
+    for m in re.finditer(r'"(?:[^"]|"")*"|\'(?:[^\']|\'\')*\'', formula):
+        out.append(convert(formula[i:m.start()]))
+        out.append(m.group(0))
+        i = m.end()
+    out.append(convert(formula[i:]))
+    return "".join(out)
+
+
+def _week_key(name):
+    """(start day, start month, end day, end month) from a week tab's name, so
+    '28 Sep-2 Oct' finds '28 September - 2 October' and '5-9 Oct' finds
+    '5 October - 9 October'. None when the name is not a date range."""
+    import re
+    m = re.search(r"(\d{1,2})\s*([A-Za-z]+)?\s*-\s*(\d{1,2})\s*([A-Za-z]+)", str(name or ""))
+    if not m:
+        return None
+    end_m = m.group(4)[:3].lower()
+    start_m = (m.group(2) or m.group(4))[:3].lower()
+    if start_m not in _MONTH_MAP or end_m not in _MONTH_MAP:
+        return None
+    return int(m.group(1)), start_m, int(m.group(3)), end_m
+
+
+def _find_weekly_tab(sheets, tab):
+    """The exact tab (ignoring case and outer spaces), else the ONE tab whose
+    date range matches. None when nothing, or more than one, matches."""
+    want = str(tab or "").strip().lower()
+    exact = [s for s in sheets if s.strip().lower() == want]
+    if exact:
+        return exact[0]
+    key = _week_key(tab)
+    if not key:
+        return None
+    hits = [s for s in sheets if "pexa check" not in s.lower() and _week_key(s) == key]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _repair_formula(tab, matter, dry=True):
+    """See the block comment above. Returns (result_dict, http_status)."""
+    import re
+    from collections import Counter
+
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    if not sharepoint_url:
+        return {"success": False, "error": "SHAREPOINT_EXCEL_URL not configured"}, 500
+
+    drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+    sheets = graph_client.get_excel_worksheets(drive_id, item_id)
+    sheet = _find_weekly_tab(sheets, tab)
+    if not sheet:
+        return {"success": False, "error": f"no tab named '{tab}' (or more than one matching it)",
+                "tabs": sheets[:60]}, 404
+    if "pexa check" in sheet.lower() or sheet.lower().strip() in _PUSH_SKIP_SHEETS:
+        return {"success": False, "error": f"'{sheet}' is not a weekly tab"}, 400
+
+    used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet, r1c1=True)
+    values, formulas, r1c1, address = used["values"], used["formulas"], used["formulasR1C1"], used["address"]
+    if not values:
+        return {"success": False, "error": f"'{sheet}' is empty"}, 404
+    # Row/column arithmetic below assumes the used range starts in column A,
+    # as on every weekly tab (column A is the matter). Refuse otherwise.
+    first_cell = (address.split("!")[-1] if address else "A1").lstrip("$")
+    if not first_cell.upper().startswith("A") or (len(first_cell) > 1 and first_cell[1].isalpha()):
+        return {"success": False, "error": f"used range {address} does not start at column A"}, 409
+    start_row = _range_start_row(address)
+
+    wanted = {h.lower() for h in REPAIR_FORMULA_HEADERS}
+    hr = hc = None
+    for ri in range(min(20, len(values))):
+        for ci in range(len(values[ri])):
+            if str(values[ri][ci] or "").strip().lower() in wanted:
+                hr, hc = ri, ci
+                break
+        if hr is not None:
+            break
+    if hr is None:
+        return {"success": False, "error": f"'{sheet}' has no column headed {' / '.join(REPAIR_FORMULA_HEADERS)}"}, 404
+    letter = _col_letter(hc)
+
+    def is_matter(ri, num):
+        a = str(values[ri][0] or "").strip() if values[ri] else ""
+        return a.startswith(num) and not a[len(num):len(num) + 1].isdigit()
+
+    targets = [ri for ri in range(hr + 1, len(values)) if is_matter(ri, matter)]
+    if not targets:
+        return {"success": False, "error": f"matter {matter} is not on '{sheet}'"}, 404
+    if len(targets) > 1:
+        return {"success": False, "error": f"matter {matter} is on '{sheet}' {len(targets)} times - repair by hand",
+                "rows": [start_row + ri for ri in targets]}, 409
+    ri = targets[0]
+    cell = f"{letter}{start_row + ri}"
+    cell_value = values[ri][hc] if hc < len(values[ri]) else ""
+    out = {
+        "success": True, "dry": dry, "tab": sheet, "matter": matter,
+        "colA": str(values[ri][0] or "").strip(), "header": str(values[hr][hc] or "").strip(),
+        "cell": cell, "currentValue": cell_value,
+    }
+    if _is_formula_cell(formulas, ri, hc):
+        out.update(alreadyFormula=True, currentFormula=formulas[ri][hc],
+                   note="the cell already holds a formula - nothing to do")
+        return out, 200
+
+    # Healthy rows: matter rows on this tab whose cell in the column IS a formula.
+    donors = []
+    for rj in range(hr + 1, len(values)):
+        if rj == ri or not re.match(r"\d{3,}", str(values[rj][0] or "").strip() if values[rj] else ""):
+            continue
+        if not _is_formula_cell(formulas, rj, hc):
+            continue
+        try:
+            f = r1c1[rj][hc]
+        except (IndexError, TypeError):
+            continue
+        if isinstance(f, str) and f.startswith("="):
+            donors.append((rj, f))
+    if not donors:
+        return {"success": False, "error": f"no healthy {letter} formula on '{sheet}' to copy from"}, 409
+    counts = Counter(f for _, f in donors)
+    best, same = counts.most_common(1)[0]
+    if same * 2 <= len(donors):
+        return {"success": False, "error": "the healthy rows do not agree on one formula - repair by hand",
+                "variants": [{"r1c1": f, "rows": n} for f, n in counts.most_common(5)]}, 409
+    donor_ri = min((rj for rj, f in donors if f == best), key=lambda rj: abs(rj - ri))
+    donor_cell = f"{letter}{start_row + donor_ri}"
+
+    out.update(
+        writeR1C1=best,
+        expectedA1=_r1c1_to_a1(best, start_row + ri, hc + 1),
+        donorCell=donor_cell,
+        donorFormula=formulas[donor_ri][hc],
+        healthyRows=len(donors), rowsWithThisFormula=same,
+        willDiscard=cell_value,
+    )
+
+    # The note painted the cell in Apollo's TTB blue-grey. Take exactly THAT
+    # paint off (back to no fill); any other fill is someone's and stays. Not
+    # copied from the donor: on the live tabs (1 Oct) healthy rows differ —
+    # some have no fill, some still carry an old Apollo blue-grey. Decoration
+    # only: a failure here never blocks the formula.
+    ttb_fill = APOLLO_KINDS["ttb"]["fill"].upper()
+    look = {}
+    try:
+        look = {"fillNow": graph_client.get_excel_cell_fill(drive_id, item_id, sheet, cell)}
+    except Exception as e:
+        look = {"error": str(e)}
+    clear_fill = str(look.get("fillNow") or "").upper() == ttb_fill
+    look["clearApolloFill"] = clear_fill
+    out["look"] = look
+
+    if dry:
+        return out, 200
+
+    graph_client.set_excel_cell_formula_r1c1(drive_id, item_id, sheet, cell, best)
+    logger.info(f"repair-formula: {sheet}!{cell} (matter {matter}) <- {best} (from {donor_cell})")
+    if clear_fill:
+        try:
+            graph_client.clear_excel_cell_fill(drive_id, item_id, sheet, cell)
+        except Exception as e:
+            out["lookError"] = str(e)
+
+    after = graph_client.get_excel_cell(drive_id, item_id, sheet, cell)
+    out["after"] = after
+    out["verified"] = after.get("formulaR1C1") == best
+    out["success"] = out["verified"]
+    if not out["verified"]:
+        out["error"] = "read-back does not match the formula written - check the cell"
+    return out, (200 if out["verified"] else 500)
+
+
+@app.route("/api/repair-formula", methods=["POST"])
+def api_repair_formula():
+    """POST {tab, matter[, dry][, token]} — restore the TTB Check formula on one
+    matter's row of one weekly tab, copied (R1C1) from a healthy row of that tab.
+
+    DRY RUN BY DEFAULT: it writes only when the body says "dry": false, and the
+    dry answer shows the cell, what it holds now (which is discarded), the R1C1
+    formula it would write, its expected A1 reading and the donor row.
+
+    Token-guarded, always: the token must match FIREBASE_WORKSPACE_TOKEN (the
+    same secret Apollo's lookups use) or APOLLO_NOTE_TOKEN; with neither set on
+    this instance the endpoint refuses."""
+    data = request.get_json(silent=True) or {}
+    accepted = [t for t in (os.getenv("FIREBASE_WORKSPACE_TOKEN", ""), os.getenv("APOLLO_NOTE_TOKEN", "")) if t]
+    if not accepted:
+        return jsonify({"success": False, "error": "no token configured on this instance - repair disabled"}), 503
+    supplied = str(data.get("token") or request.args.get("token") or "")
+    if not supplied or not any(hmac.compare_digest(supplied, t) for t in accepted):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+
+    tab = str(data.get("tab") or "").strip()
+    matter = str(data.get("matter") or "").strip()
+    if not tab or not matter.isdigit() or not (3 <= len(matter) <= 7):
+        return jsonify({"success": False, "error": "tab and a numeric matter are required"}), 400
+    # Writes only on an explicit false — a missing or odd value stays a dry run.
+    dry = not (data.get("dry") is False or str(data.get("dry")).strip().lower() in ("0", "false", "no"))
+    try:
+        result, status = _repair_formula(tab, matter, dry=dry)
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"repair-formula failed: {e}", exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/push-to-excel", methods=["POST"])
 def api_push_to_excel():
-    """Push selected notifications to the shared SharePoint Excel spreadsheet.
-    If async_mode=true, runs in background thread and returns immediately."""
-    data = request.json or {}
-    ids = data.get("ids", [])
-    if not ids:
-        return jsonify({"success": False, "error": "No notification IDs provided"}), 400
-
-    skip_complete = data.get("skip_complete", False)
-    async_mode = data.get("async_mode", False)
-
-    if async_mode:
-        # Run in background thread so the HTTP response returns immediately
-        import threading
-        def _bg_push():
-            try:
-                result = _do_push_to_excel(ids, skip_complete=skip_complete)
-                logger.info(f"Background push complete: {result.get('message', 'done')}")
-            except Exception as e:
-                logger.error(f"Background push failed: {e}", exc_info=True)
-        threading.Thread(target=_bg_push, daemon=True).start()
-        return jsonify({
-            "success": True,
-            "count": len(ids),
-            "message": f"Queued {len(ids)} ticket(s) for background push",
-            "background": True,
-        })
-
-    # Synchronous mode
-    result = _do_push_to_excel(ids, skip_complete=skip_complete)
-    if not result.get("success"):
-        return jsonify(result), 500
-    return jsonify(result)
+    """Retired (2026-10-01) - see PUSH_RETIRED_REASON. 410 Gone."""
+    return jsonify({"success": False, "retired": True, "error": PUSH_RETIRED_REASON}), 410
 
 
 @app.route("/api/recover-missing-pushes", methods=["POST"])
 def api_recover_missing_pushes():
-    """Find all actioned tickets without a spreadsheet push note and push them now.
-    Runs in the background."""
-    data = request.json or {}
-    days = int(data.get("days", 3))
-    try:
-        from datetime import datetime as _dt, timedelta as _td
-        cutoff = _dt.utcnow() - _td(days=days)
-
-        notifs = get_notifications({"status": "actioned"})
-        missing_ids = []
-        for n in notifs:
-            notes = (n.get("notes") or "").lower()
-            if "spreadsheet" in notes:
-                continue
-            actioned_by = n.get("actioned_by") or ""
-            if actioned_by in ("System", "Push to Spreadsheet", "Via Email Link"):
-                continue
-            actioned_at = n.get("actioned_at") or ""
-            if not actioned_at:
-                continue
-            try:
-                dt = _dt.fromisoformat(actioned_at.replace("Z", "").split("+")[0])
-                if dt < cutoff:
-                    continue
-            except Exception:
-                continue
-            missing_ids.append(n["id"])
-
-        if not missing_ids:
-            return jsonify({"success": True, "count": 0, "message": "No missing pushes found"})
-
-        logger.info(f"Recovery: queuing {len(missing_ids)} missing pushes in background")
-
-        # Run in background thread
-        import threading
-        def _bg_recover():
-            try:
-                result = _do_push_to_excel(missing_ids, skip_complete=True)
-                logger.info(f"Recovery push complete: {result.get('message', 'done')}")
-            except Exception as e:
-                logger.error(f"Recovery push failed: {e}", exc_info=True)
-        threading.Thread(target=_bg_recover, daemon=True).start()
-
-        return jsonify({
-            "success": True,
-            "count": len(missing_ids),
-            "message": f"Queued {len(missing_ids)} missing ticket(s) for background recovery",
-        })
-    except Exception as e:
-        logger.error(f"Recovery failed: {e}", exc_info=True)
-        return jsonify({"success": False, "error": str(e)}), 500
+    """Retired (2026-10-01) - it re-ran the same push. 410 Gone."""
+    return jsonify({"success": False, "retired": True, "error": PUSH_RETIRED_REASON}), 410
 
 
 def _col_letter(col_index):
@@ -2470,16 +2565,8 @@ def auto_push_notifications():
 
 @app.route("/api/auto-push", methods=["POST"])
 def api_auto_push():
-    """Manually trigger the hourly auto-push job (runs in background thread
-    so the HTTP response returns immediately)."""
-    import threading
-    def _bg():
-        try:
-            auto_push_notifications()
-        except Exception as e:
-            logger.error(f"Manual auto-push trigger failed: {e}", exc_info=True)
-    threading.Thread(target=_bg, daemon=True).start()
-    return jsonify({"success": True, "message": "Auto-push triggered in background — see server logs for results"})
+    """Retired (2026-10-01) - it ran the same PEXA Notes push. 410 Gone."""
+    return jsonify({"success": False, "retired": True, "error": PUSH_RETIRED_REASON}), 410
 
 
 # --- Startup ---
@@ -2525,10 +2612,10 @@ if RUN_NOTIFICATIONS:
     # sheet contents for ~10x speedup"); the workbook has gained a tab a week
     # since, and the instance has 512MB.
     #
-    # The function and /api/auto-push are deliberately left in place, so this is
-    # one line to reverse if the spreadsheet is ever wanted again. If it is,
-    # invert the loops first — iterate sheets on the outside and notifications
-    # within, so only one tab is in memory at a time.
+    # Retired outright on 2026-10-01: _do_push_to_excel is now a stub and
+    # /api/auto-push answers 410 - without the PEXA Notes header the old push
+    # inserted a new column G on every weekly tab. Re-enabling this line does
+    # nothing; a new push would have to be written against a header that exists.
     # scheduler.add_job(auto_push_notifications, "interval", hours=1, id="auto_push")
 if RUN_WORKSPACES:
     scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")

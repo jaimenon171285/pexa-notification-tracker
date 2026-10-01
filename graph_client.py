@@ -375,6 +375,69 @@ class GraphClient:
         data = self._request("GET", url, params={"$select": "values,address"})
         return data.get("values", []), data.get("address", "")
 
+    def get_excel_used_range_with_formulas(self, drive_id, item_id, sheet_name, r1c1=False):
+        """The used range's values AND formulas, in the SAME single call.
+
+        Every Apollo write path reads the used range anyway (to find the header
+        and the matter's row), so the formula guard rides on that read rather
+        than costing a Graph call per cell — this instance has one worker.
+        `formulas` holds the formula text ("=IF(...)") for a formula cell and
+        the plain constant for any other cell. Pass r1c1=True to also get
+        `formulasR1C1` (the repair tool copies a formula from row to row in
+        that form, so its relative references stay right).
+
+        Returns {"values", "formulas", "formulasR1C1", "address"}.
+        """
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/{safe_sheet}/usedRange"
+        select = "values,formulas,address" + (",formulasR1C1" if r1c1 else "")
+        data = self._request("GET", url, params={"$select": select})
+        return {
+            "values": data.get("values", []) or [],
+            "formulas": data.get("formulas", []) or [],
+            "formulasR1C1": data.get("formulasR1C1", []) or [],
+            "address": data.get("address", "") or "",
+        }
+
+    def get_excel_cell(self, drive_id, item_id, sheet_name, cell_addr):
+        """One cell's value, formula and R1C1 formula — the read-back after a repair."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}/workbook/worksheets/"
+               f"{safe_sheet}/range(address='{cell_addr}')")
+        data = self._request("GET", url, params={"$select": "values,formulas,formulasR1C1,address"})
+        cell = lambda k: ((data.get(k) or [[None]])[0] or [None])[0]
+        return {"value": cell("values"), "formula": cell("formulas"),
+                "formulaR1C1": cell("formulasR1C1"), "address": data.get("address", "")}
+
+    def set_excel_cell_formula_r1c1(self, drive_id, item_id, sheet_name, cell_addr, formula_r1c1):
+        """Put a formula into ONE cell, given in R1C1 form, so references relative
+        to the row it was copied from land relative to this row."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}"
+               f"/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')")
+        payload = {"formulasR1C1": [[formula_r1c1]]}
+        response = requests.patch(url, headers=self._headers(), json=payload)
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.patch(url, headers=self._headers(), json=payload)
+        response.raise_for_status()
+        return response.json()
+
+    def clear_excel_cell_fill(self, drive_id, item_id, sheet_name, cell_addr):
+        """Take a cell's fill off entirely (back to no fill — not white)."""
+        import urllib.parse
+        safe_sheet = urllib.parse.quote(sheet_name, safe="")
+        url = (f"{GRAPH_API_BASE}/drives/{drive_id}/items/{item_id}"
+               f"/workbook/worksheets/{safe_sheet}/range(address='{cell_addr}')/format/fill/clear")
+        response = requests.post(url, headers=self._headers())
+        if response.status_code == 401:
+            self._get_token()
+            response = requests.post(url, headers=self._headers())
+        response.raise_for_status()
+
     def update_excel_cell(self, drive_id, item_id, sheet_name, cell_addr, value, fill=None, font=None):
         """Write a value to a specific cell in a worksheet, with no text wrapping.
         Pass fill="#RRGGBB" to also shade the cell (used to mark Apollo's notes),
