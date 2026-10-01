@@ -11,6 +11,9 @@
     colour (an empty cell is written and painted as usual).
   - FIX 8: SHAREPOINT_ITEM_ID + SHAREPOINT_DRIVE_ID are enough on their own —
     an empty SHAREPOINT_EXCEL_URL no longer switches everything off.
+  - a note already in its cell is never written twice (a retry after a 502
+    that had landed, two queue runs at once) and counts as success;
+    /api/week-matters gives each tab's last day (`end`).
 
 No network, no workbook: the in-memory FakeGraph from test_sheet_guard, which
 records every write; this one also records every tab it READS. Matter numbers
@@ -20,6 +23,8 @@ Run from the repo root:  python -m unittest discover -s tests -v
 """
 import os
 import unittest
+from datetime import datetime
+from unittest import mock
 
 import test_sheet_guard as G   # sets the offline environment and imports app
 
@@ -206,6 +211,24 @@ class WeekMatters(unittest.TestCase):
         self.assertNotIn("TTB", fake.reads)
         self.assertEqual(fake.writes, [])
 
+    def test_each_tab_carries_its_last_day(self):
+        install(workbook_with_helpers("90133 PURCHASE"))
+        with mock.patch.object(tracker, "_now_sydney", lambda: datetime(2026, 10, 1, 12, 0, tzinfo=tracker.SYDNEY_TZ)):
+            d = tracker.app.test_client().get("/api/week-matters").get_json()
+        self.assertEqual([(t["sheet"], t["end"]) for t in d["tabs"]],
+                         [("28 September - 2 October", "2026-10-02"), ("5 October - 9 October", "2026-10-09"),
+                          ("12 October - 16 October", "2026-10-16")])
+
+    def test_week_tab_end_iso(self):
+        ref = datetime(2026, 10, 1, 12, 0, tzinfo=tracker.SYDNEY_TZ)
+        self.assertEqual(tracker._week_tab_end_iso("5-9 Oct", ref), "2026-10-09")
+        self.assertEqual(tracker._week_tab_end_iso("28 Sep-2 Oct", ref), "2026-10-02")
+        self.assertEqual(tracker._week_tab_end_iso("28 September - 2 October", ref), "2026-10-02")
+        self.assertIsNone(tracker._week_tab_end_iso("PEXA CHECK 28September-2October", ref))
+        self.assertIsNone(tracker._week_tab_end_iso("TTB", ref))
+        year_end = datetime(2026, 12, 30, 12, 0, tzinfo=tracker.SYDNEY_TZ)
+        self.assertEqual(tracker._week_tab_end_iso("28 December - 1 January", year_end), "2027-01-01")
+
 
 class LateNotes(unittest.TestCase):
     def test_late_note_goes_under_and_keeps_the_colour(self):
@@ -249,6 +272,67 @@ class LateNotes(unittest.TestCase):
         install({"5 October - 9 October": tab({"colA": "90146 PURCHASE"})})
         r = tracker.app.test_client().post("/api/adj-note", json={"matterNumber": "90146", "note": "n", "kind": "nope"})
         self.assertEqual(r.status_code, 400)
+
+
+class NotWrittenTwice(unittest.TestCase):
+    """A retry of a note that already landed (a 502 after the write, two queue
+    runs at once, the replay tool re-sending a failure that had landed) finds
+    its line in the cell and writes nothing — and counts as success."""
+    NOTE = "FSO sent 21/09/2026 by Pat Tester (From apollo)"
+
+    def test_live_note_already_on_top(self):
+        fake = install({"5 October - 9 October": tab({"colA": "90160 PURCHASE", "fso": f"{self.NOTE}\nolder"})})
+        out = tracker._push_sheet_note("90160", self.NOTE, kind="fso")
+        self.assertTrue(out["success"], out)
+        self.assertEqual((out["updated"], out["already"], out["error"]), ([], ["5 October - 9 October!J2"], None))
+        self.assertEqual(fake.writes, [])
+        self.assertNotIn("J2", fake.tabs["5 October - 9 October"].fill)   # not repainted either
+
+    def test_already_anywhere_in_the_cell_and_late(self):
+        fake = install({"5 October - 9 October": tab(
+            {"colA": "90161 PURCHASE", "fso": f"team text\n  {self.NOTE}  \r\nolder"})})
+        for late in (False, True):
+            out = tracker._push_sheet_note("90161", self.NOTE, kind="fso", late=late)
+            self.assertTrue(out["success"], out)
+        self.assertEqual(fake.writes, [])
+
+    def test_part_of_a_line_is_not_the_note(self):
+        fake = install({"5 October - 9 October": tab({"colA": "90162 PURCHASE", "fso": f"{self.NOTE} — called client"})})
+        out = tracker._push_sheet_note("90162", self.NOTE, kind="fso")
+        self.assertEqual(out["updated"], ["5 October - 9 October!J2"])
+        self.assertEqual(fake.writes[0][3], f"{self.NOTE}\n{self.NOTE} — called client")
+
+    def test_sent_twice_lands_once(self):
+        c = tracker.app.test_client()
+        fake = install({"5 October - 9 October": tab({"colA": "90163 PURCHASE", "fso": "older"})})
+        body = {"matterNumber": "90163", "note": self.NOTE, "kind": "fso"}
+        r1 = c.post("/api/adj-note", json=body)
+        r2 = c.post("/api/adj-note", json=dict(body, late=True))
+        self.assertEqual((r1.status_code, r2.status_code), (200, 200))
+        self.assertEqual(r2.get_json()["already"], ["5 October - 9 October!J2"])
+        self.assertEqual(len(fake.writes), 1)
+        self.assertEqual(fake.tabs["5 October - 9 October"].values[1][9], f"{self.NOTE}\nolder")
+
+    def test_only_the_tab_that_missed_it_is_written(self):
+        fake = install({
+            "28 September - 2 October": tab({"colA": "90164 PURCHASE", "fso": self.NOTE}),
+            "5 October - 9 October": tab({"colA": "90164 PURCHASE"}),
+        })
+        out = tracker._push_sheet_note("90164", self.NOTE, kind="fso")
+        self.assertEqual((out["already"], out["updated"]), (["28 September - 2 October!J2"], ["5 October - 9 October!J2"]))
+        self.assertEqual([w[1] for w in fake.writes], ["5 October - 9 October"])
+
+    def test_a_note_of_several_lines_must_be_there_whole(self):
+        self.assertTrue(tracker._note_already_in("x\nline one\nline two\ny", "line one\nline two"))
+        self.assertFalse(tracker._note_already_in("line one\nx\nline two", "line one\nline two"))
+        self.assertFalse(tracker._note_already_in("", self.NOTE))
+        self.assertFalse(tracker._note_already_in("anything", "  "))
+
+    def test_the_formula_guard_still_comes_first(self):
+        fake = install({"5 October - 9 October": tab({"colA": "90165 PURCHASE"})})
+        out = tracker._push_sheet_note("90165", "YES", kind="ttb")      # the formula's own value
+        self.assertEqual((out["success"], out["code"], out["already"]), (False, "formula_cell", []))
+        self.assertEqual(fake.writes, [])
 
 
 class WorkbookConfig(unittest.TestCase):

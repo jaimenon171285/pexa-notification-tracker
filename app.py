@@ -1265,6 +1265,19 @@ def _workbook_not_configured():
     return "SHAREPOINT_EXCEL_URL not configured (nor SHAREPOINT_ITEM_ID + SHAREPOINT_DRIVE_ID)"
 
 
+def _note_already_in(existing, note_text):
+    """True when the cell's text already holds note_text as whole line(s):
+    each line stripped, compared exactly. A note of several lines must appear
+    as the same run of lines. Part of a line never counts — "FSO sent 21/09"
+    is not in "FSO sent 21/09 by Pat"."""
+    want = [ln.strip() for ln in str(note_text or "").splitlines() if ln.strip()]
+    if not want:
+        return False
+    have = [ln.strip() for ln in str(existing or "").splitlines()]
+    n = len(want)
+    return any(have[i:i + n] == want for i in range(len(have) - n + 1))
+
+
 def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, late=False):
     """Write note_text into Apollo's column on every weekly tab row for this
     matter. Prepends to whatever is already there, so history is never lost.
@@ -1280,6 +1293,17 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, late=
     Prepending and repainting would put e.g. a grey "SD forms received 07/09"
     over a green "SD lodged 25/09" and tell the team the duty is not done. A
     replayed note with nothing newer in the cell is written like any other.
+    Apollo sends every note from its replay tool as late, whatever the cell
+    holds: those are days or weeks old, and the team has had the cell since.
+
+    IDEMPOTENT (2026-10-01): a cell that already holds the note — one of its
+    lines is exactly note_text — is not written again. It is reported in
+    `already` and counts as success. A note takes ~20 s on this single worker,
+    so a worker kill or a restart after the write but before the answer leaves
+    Apollo with a 502 or no answer for a note that DID land; its retry queue
+    sends it again, and two queue runs that overlap send the same notes. Live
+    and queued notes are composed identically (the event's date is fixed when
+    it happens), so the second write is recognised here and skipped.
     """
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     missing = _workbook_not_configured()
@@ -1318,7 +1342,7 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, late=
     try:
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
-        updated, errors, refused = [], [], []
+        updated, errors, refused, already = [], [], [], []
 
         # Weekly tabs ONLY (a name that is a date range) — never PEXA CHECK,
         # Import, TTB, Master Data, invoices or whatever helper tab the next
@@ -1379,6 +1403,11 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, late=
                     existing = ""
                     if sheet_col_idx < len(values[ri]):
                         existing = str(values[ri][sheet_col_idx] or "").strip()
+                    # Already there (a retry of a note that landed): not twice.
+                    if _note_already_in(existing, note_text):
+                        already.append(f"{sheet}!{target_cell}")
+                        logger.info(f"Apollo note already in {sheet}!{target_cell} for matter {matter_num} — not written twice: {note_text}")
+                        continue
                     if late and existing:
                         # Late: under what is there, and the cell's colour stays.
                         new_value = f"{existing}\n{note_text}"
@@ -1396,19 +1425,21 @@ def _push_sheet_note(matter_number, note_text, col_letter=None, kind=None, late=
 
         # Nothing written because every row found was a formula cell: that is a
         # refusal, not "not found" — Apollo must not queue it to try again.
-        if updated:
+        # A note that was already in its cell(s) is a success: it is there.
+        if updated or already:
             error, code = None, None
         elif refused:
             error, code = FORMULA_REFUSED, "formula_cell"
         else:
             error, code = "matter not found on any weekly tab", None
         return {
-            "success": bool(updated),
+            "success": bool(updated or already),
             "matter": matter_num,
             "column": col_letter,
             "note": note_text,
             "late": bool(late),
             "updated": updated,
+            "already": already,
             "refused": refused,
             "errors": errors,
             "error": error,
@@ -1507,7 +1538,9 @@ def api_adj_note():
     # header text, so the sheet can be reorganised without silently redirecting
     # Apollo. `column` is the older positional form, still accepted.
     # `late: true` — a replayed note older than what Apollo has already put in
-    # the cell: written under the text, colour left alone (_push_sheet_note).
+    # the cell, or any note from Apollo's replay tool: written under the text,
+    # colour left alone (_push_sheet_note). A note already in the cell is not
+    # written twice and answers 200 with it in `already`.
     result = _push_sheet_note(
         data.get("matterNumber"), data.get("note"),
         col_letter=(None if data.get("kind") else (data.get("column") or ADJ_COL_LETTER)),
@@ -2155,7 +2188,11 @@ def api_week_matters():
     dates — matters sit on tabs outside their settlement week, and some matters
     in a week are not on the sheet at all. Reads only A1:A600 of each weekly
     tab (not the used range), so it is light on this single worker. Returns
-    numbers only — nothing else from the row."""
+    numbers only — nothing else from the row.
+
+    Each tab also carries `end`, the week's last day (YYYY-MM-DD, null when
+    the name cannot be read as dates), so Apollo can take this week's and
+    next week's tab by default instead of every tab in the file."""
     import re
     sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
     missing = _workbook_not_configured()
@@ -2165,6 +2202,7 @@ def api_week_matters():
         drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
         sheets = graph_client.get_excel_worksheets(drive_id, item_id)
         tabs, seen = [], []
+        ref = _now_sydney()
         for sheet in _week_tabs(sheets):
             col = graph_client.get_excel_range(drive_id, item_id, sheet, "A1:A600")
             nums = []
@@ -2172,7 +2210,7 @@ def api_week_matters():
                 m = re.match(r"(\d{3,})(?!\d)", str((row or [""])[0] or "").strip())
                 if m and m.group(1) not in nums:
                     nums.append(m.group(1))
-            tabs.append({"sheet": sheet, "matters": nums})
+            tabs.append({"sheet": sheet, "end": _week_tab_end_iso(sheet, ref), "matters": nums})
             seen.extend(n for n in nums if n not in seen)
         return jsonify({"success": True, "tabs": tabs, "matters": seen})
     except Exception as e:
@@ -2308,6 +2346,19 @@ def _is_week_tab(name):
 def _week_tabs(sheets):
     """The weekly tabs of a workbook, in the workbook's order."""
     return [s for s in (sheets or []) if _is_week_tab(s)]
+
+
+def _week_tab_end_iso(name, ref_date=None):
+    """A weekly tab's last day as 'YYYY-MM-DD' — '28 September - 2 October'
+    and '5-9 Oct' alike — with the year inferred as _parse_tab_end_date does.
+    None when the name is not a weekly tab."""
+    s = str(name or "").strip()
+    if not _is_week_tab(s):
+        return None
+    m = _WEEK_TAB_RE.fullmatch(s)
+    day, month = m.group(3), m.group(4)
+    end = _parse_tab_end_date(f"{day} {month} - {day} {month}", ref_date=ref_date)
+    return end.strftime("%Y-%m-%d") if end else None
 
 
 def _find_weekly_tab(sheets, tab):
