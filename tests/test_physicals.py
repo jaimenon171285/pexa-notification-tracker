@@ -81,5 +81,49 @@ class PhysicalsTest(unittest.TestCase):
         self.assertFalse(j.get("already"))
 
 
+class UpdateTest(unittest.TestCase):
+    def setUp(self):
+        self.g = Graph({"Physicals": Sheet(tab())})
+        tracker.graph_client = self.g
+        self.c = tracker.app.test_client()
+
+    def post(self, **body):
+        r = self.c.post("/api/physicals/update", json=body)
+        return r.status_code, r.get_json()
+
+    def test_note_goes_above_the_teams_text(self):
+        _, j = self.post(matterNumber="90001", state="QLD", notes=[{"column": "transfer", "text": "Transfer sent 19/10/2026 by Zane (From apollo)"}])
+        self.assertEqual(self.g.writes, [("Physicals", "D3", [["Transfer sent 19/10/2026 by Zane (From apollo)\nDrafted"]])])
+        self.assertEqual(len(j["written"]), 1)
+
+    def test_a_note_already_there_is_not_written_twice(self):
+        self.g.tabs["Physicals"].values[2][3] = "Transfer sent 19/10/2026 by Zane (From apollo)\nDrafted"
+        _, j = self.post(matterNumber="90001", notes=[{"column": "Transfer", "text": "Transfer sent 19/10/2026 by Zane (From apollo)"}])
+        self.assertEqual((self.g.writes, len(j["already"])), ([], 1))
+
+    def test_settlement_date_overwritten(self):
+        self.post(matterNumber="90002", settlementDate="2026-11-09")
+        self.assertEqual(self.g.writes, [("Physicals", "C4", [["2026-11-09"]])])
+
+    def test_reason_and_two_notes_same_column(self):
+        self.post(matterNumber="90002", reason="Bank not on PEXA",
+                  notes=[{"column": "bank + shortfall", "text": "Bank booked 1"}, {"column": "bank + shortfall", "text": "Shortfall account: Yes 2"}])
+        self.assertEqual(sorted(self.g.writes), [("Physicals", "G4", [["Shortfall account: Yes 2\nBank booked 1"]]),
+                                                 ("Physicals", "J4", [["Bank not on PEXA"]])])
+
+    def test_not_on_the_tab_is_added_with_its_notes(self):
+        _, j = self.post(matterNumber="90009", state="NSW", settlementDate="2026-12-01", notes=[{"column": "sign off", "text": "Signed off"}])
+        self.assertTrue(j["added"])
+        self.assertEqual(sorted(a for _, a, _ in self.g.writes), ["A5", "B5", "C5", "I5"])
+
+    def test_unknown_column_is_skipped_not_fatal(self):
+        _, j = self.post(matterNumber="90001", notes=[{"column": "nope", "text": "x"}])
+        self.assertEqual((self.g.writes, len(j["skipped"])), ([], 1))
+
+    def test_dry(self):
+        _, j = self.post(matterNumber="90001", notes=[{"column": "agent", "text": "Agent booked"}], dry=True)
+        self.assertEqual((self.g.writes, list(j["cells"])), ([], ["F3"]))
+
+
 if __name__ == "__main__":
     unittest.main()

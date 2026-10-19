@@ -2146,6 +2146,126 @@ def api_physicals_add():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+
+# ── Physicals tab: keeping the row up to date (Jai, 19 Oct 2026) ────────────
+# Apollo sends what changed on a physical matter: a step ticked (a note for its
+# column), the settlement date, the reason. A note goes ABOVE the team's text in
+# the cell (never replaces it) and is never written twice; the settlement date
+# is Apollo's (Key Dates owns it) and is overwritten. A matter not on the tab yet
+# is added first.
+
+PHYSICALS_COLUMNS = ("transfer", "adjustments", "agent", "bank + shortfall", "stamp duty", "sign off",
+                     "reason for physical")
+
+
+def _physicals_header(values):
+    """-> (header row index, {name: col index}) for the Physicals tab, or (None, {})."""
+    for i, row in enumerate(values or []):
+        head = [str(c or "").strip().lower() for c in row]
+        if "jurisdiction" in head:
+            cols = {h: j for j, h in enumerate(head) if h in PHYSICALS_COLUMNS}
+            cols["jurisdiction"] = head.index("jurisdiction")
+            s = next((j for j, h in enumerate(head) if j > 0 and h.startswith("settlement date")), None)
+            if s is not None:
+                cols["settlement date"] = s
+            return i, cols
+    return None, {}
+
+
+def _physicals_update_plan(values, address, matter, state, settle, reason, notes):
+    """Pure. -> {"row", "cells": {addr: value}, "written": [..], "already": [..], "skipped": [..],
+    "added": bool} or {"error"}."""
+    import re
+    plan = _physical_row_plan(values, address, matter, state, settle)
+    if plan.get("error"):
+        return plan
+    m = re.search(r"!\$?([A-Z]+)\$?(\d+)", str(address or ""))
+    first_row = int(m.group(2)) if m else 1
+    head_i, cols = _physicals_header(values)
+    cells, written, already, skipped = {}, [], [], []
+    if plan.get("already"):
+        row, added = plan["already"], False
+        current = values[row - first_row]
+    else:
+        row, added = plan["row"], True
+        for col, val in plan["cells"].items():
+            cells["%s%d" % (col, row)] = val
+        current = []
+
+    def cur(ci):
+        return current[ci] if ci < len(current) else ""
+
+    if settle and not added and "settlement date" in cols:
+        cells["%s%d" % (_col_letter(cols["settlement date"]), row)] = settle
+    text_for = {}
+    for n in notes or []:
+        col = str((n or {}).get("column") or "").strip().lower()
+        text = str((n or {}).get("text") or "").strip()
+        if not text:
+            continue
+        if col not in cols:
+            skipped.append({"column": col, "text": text, "error": "no \"%s\" column on the Physicals tab" % col})
+            continue
+        text_for.setdefault(col, []).append(text)
+    if reason:
+        if "reason for physical" in cols:
+            text_for.setdefault("reason for physical", []).append(str(reason).strip())
+        else:
+            skipped.append({"column": "reason for physical", "text": reason, "error": "no Reason for Physical column"})
+    for col, texts in text_for.items():
+        ci = cols[col]
+        existing = str(cur(ci) or "")
+        new = [t for t in texts if not _note_already_in(existing, t)]
+        already += [{"column": col, "text": t} for t in texts if t not in new]
+        if not new:
+            continue
+        # newest first, above the team's text
+        cells["%s%d" % (_col_letter(ci), row)] = "\n".join(list(reversed(new)) + ([existing] if existing.strip() else []))
+        written += [{"column": col, "text": t} for t in new]
+    return {"row": row, "added": added, "cells": cells, "written": written, "already": already, "skipped": skipped}
+
+
+@app.route("/api/physicals/update", methods=["POST"])
+def api_physicals_update():
+    """POST {matterNumber, state, settlementDate?, reason?, notes: [{column, text}], dry?, token?}."""
+    import re
+    data = request.get_json(silent=True) or {}
+    required = os.getenv("APOLLO_NOTE_TOKEN", "")
+    if required and str(data.get("token", "")) != required:
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+    matter = str(data.get("matterNumber") or "").strip()
+    if not re.fullmatch(r"\d{3,}", matter):
+        return jsonify({"success": False, "error": "matterNumber is required"}), 400
+    state = str(data.get("state") or "").strip().upper()[:3]
+    settle = str(data.get("settlementDate") or "").strip()[:10]
+    if settle and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", settle):
+        settle = ""
+    notes = data.get("notes") if isinstance(data.get("notes"), list) else []
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(os.getenv("SHAREPOINT_EXCEL_URL", ""))
+        tab = _physicals_tab(graph_client.get_excel_worksheets(drive_id, item_id))
+        if not tab:
+            return jsonify({"success": False, "code": "no_tab", "error": "no Physicals tab in the workbook"}), 404
+        values, address = graph_client.get_excel_used_range(drive_id, item_id, tab)
+        plan = _physicals_update_plan(values, address, matter, state, settle, str(data.get("reason") or "").strip(), notes)
+        del values
+        if plan.get("error"):
+            return jsonify({"success": False, "error": plan["error"]}), 409
+        if data.get("dry") is not True:
+            for addr, val in plan["cells"].items():
+                graph_client.update_excel_range(drive_id, item_id, tab, addr, [[val]])
+            if plan["cells"]:
+                logger.info("physicals: %s row %d updated (%s)", matter, plan["row"], ", ".join(plan["cells"]))
+        out = dict(plan, success=True, sheet=tab, dry=data.get("dry") is True)
+        return jsonify(out), 200
+    except Exception as e:
+        logger.error("physicals/update failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/adj-note/recolour", methods=["POST"])
 def api_adj_note_recolour():
     """POST {matterNumber, kind, onlyIfFill[, dry][, token]} — re-shade Apollo's
