@@ -2049,6 +2049,103 @@ def api_sheet_headers():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+# ── Physical settlements tab (Sheriff/Zane, 19 Oct 2026) ─────────────────────
+# Sheriff added a "Physicals" tab to the settlements workbook. When a matter is
+# set to Physical in Apollo, Apollo asks for it to be put on that tab: the
+# matter ("76228 PHYSICAL"), its jurisdiction and its settlement date. Every
+# other column (Transfer, Adjustments, Agent, Bank + shortfall, Stamp Duty,
+# Sign Off, Reason for Physical) is the team's — never written. A matter
+# already on the tab is left exactly as it is.
+
+def _physicals_tab(sheets):
+    """The tab named "Physicals" (any case; "Physical" too), or None."""
+    for s in sheets or []:
+        if str(s).strip().lower() in ("physicals", "physical", "physical settlements"):
+            return s
+    return None
+
+
+def _physical_row_plan(values, address, matter, state, settle):
+    """Where the matter goes on the Physicals tab, from the tab's used range.
+    -> {"already": row} | {"row": n, "cells": {"A": .., "B": .., "C": ..}} | {"error": ..}
+
+    The header row is the one with "Jurisdiction" in it. Column A is the matter;
+    the jurisdiction and settlement date columns are found by their header
+    ("Settlement Date" that is not column A). The new row goes under the last
+    row with anything in column A."""
+    import re
+    m = re.search(r"!\$?([A-Z]+)\$?(\d+)", str(address or ""))
+    first_row = int(m.group(2)) if m else 1
+    first_col = m.group(1) if m else "A"
+    if first_col != "A":
+        return {"error": "the Physicals tab does not start in column A (%s)" % address}
+    head_i = None
+    for i, row in enumerate(values or []):
+        if any(str(c or "").strip().lower() == "jurisdiction" for c in row):
+            head_i = i
+            break
+    if head_i is None:
+        return {"error": "no header row with \"Jurisdiction\" on the Physicals tab"}
+    head = [str(c or "").strip().lower() for c in values[head_i]]
+    j_col = head.index("jurisdiction")
+    s_col = next((i for i, h in enumerate(head) if i > 0 and h.startswith("settlement date")), None)
+    if s_col is None:
+        return {"error": "no \"Settlement Date\" column on the Physicals tab"}
+    last = head_i
+    for i in range(head_i + 1, len(values)):
+        a = str(values[i][0] if values[i] else "").strip()
+        if a:
+            last = i
+            if re.match(r"^%s\b" % re.escape(matter), a):
+                return {"already": first_row + i}
+    cells = {"A": "%s PHYSICAL" % matter, _col_letter(j_col): state or ""}
+    if settle:
+        cells[_col_letter(s_col)] = settle
+    return {"row": first_row + last + 1, "cells": cells}
+
+
+@app.route("/api/physicals/add", methods=["POST"])
+def api_physicals_add():
+    """POST {matterNumber, state, settlementDate ('YYYY-MM-DD'), token} — put the
+    matter on the Physicals tab unless it is already there. dry: true → plan only."""
+    import re
+    data = request.get_json(silent=True) or {}
+    required = os.getenv("APOLLO_NOTE_TOKEN", "")
+    if required and str(data.get("token", "")) != required:
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+    matter = str(data.get("matterNumber") or "").strip()
+    if not re.fullmatch(r"\d{3,}", matter):
+        return jsonify({"success": False, "error": "matterNumber is required"}), 400
+    state = str(data.get("state") or "").strip().upper()[:3]
+    settle = str(data.get("settlementDate") or "").strip()[:10]
+    if settle and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", settle):
+        settle = ""
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
+    try:
+        drive_id, item_id = graph_client.resolve_sharing_url(os.getenv("SHAREPOINT_EXCEL_URL", ""))
+        tab = _physicals_tab(graph_client.get_excel_worksheets(drive_id, item_id))
+        if not tab:
+            return jsonify({"success": False, "code": "no_tab", "error": "no Physicals tab in this month's workbook"}), 404
+        values, address = graph_client.get_excel_used_range(drive_id, item_id, tab)
+        plan = _physical_row_plan(values, address, matter, state, settle)
+        del values
+        if plan.get("error"):
+            return jsonify({"success": False, "error": plan["error"]}), 409
+        if plan.get("already"):
+            return jsonify({"success": True, "already": True, "row": plan["already"], "sheet": tab}), 200
+        if data.get("dry") is True:
+            return jsonify({"success": True, "dry": True, "row": plan["row"], "cells": plan["cells"], "sheet": tab}), 200
+        for col, val in plan["cells"].items():
+            graph_client.update_excel_range(drive_id, item_id, tab, "%s%d" % (col, plan["row"]), [[val]])
+        logger.info("physicals: %s added to %s row %d", matter, tab, plan["row"])
+        return jsonify({"success": True, "added": True, "row": plan["row"], "cells": plan["cells"], "sheet": tab}), 200
+    except Exception as e:
+        logger.error("physicals/add failed: %s", e, exc_info=True)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/api/adj-note/recolour", methods=["POST"])
 def api_adj_note_recolour():
     """POST {matterNumber, kind, onlyIfFill[, dry][, token]} — re-shade Apollo's
