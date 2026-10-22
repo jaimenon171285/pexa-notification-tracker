@@ -1140,6 +1140,20 @@ APOLLO_KINDS = {
         "headers": ["adjustments", "adjustments served", "adj served"],
         "fill": "#A02B93", "font": "#FFFFFF",   # Thomas's colour
     },
+    # ACT / WA / SA sale (Jai, 22 Oct 2026): there the vendor prepares the
+    # SAS, so Apollo's toggle means ours was prepared and sent — "SAS prepared
+    # & sent to O/S". Light blue with black text, like "Adj served": the ball
+    # is with the other side.
+    "sasprepared": {
+        "headers": ["adjustments", "adjustments served", "adj served"],
+        "fill": "#ADD8E6",                      # light blue
+    },
+    # "Adjustments agreed" (Jai, 22 Oct 2026) — finished, so the team's own
+    # done-green, the one they already turn this cell by hand.
+    "adjagreed": {
+        "headers": ["adjustments", "adjustments served", "adj served"],
+        "fill": "#C6EFCE",                      # the team's done-green
+    },
     "motready": {
         "headers": ["jm bank notes", "bank notes", "jm bank", "bank"],
         "fill": "#C6EFCE",                      # the team's done-green
@@ -2330,6 +2344,130 @@ def api_adj_note_recolour():
         return jsonify({"success": True, "dry": dry, "matter": matter_num, "kind": kind,
                         "recoloured": done, "leftAlone": left})
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+#  One wrong Apollo line in a cell, put right (Jai, 22 Oct 2026).
+#
+#  Apollo's 06:45 row-move re-send dated notes by when they last LANDED, not
+#  when they happened, so 28 cells on 12 matters got a second copy of a note
+#  with the wrong date (75689: "Adj served on O/S 17/10/2026" under the right
+#  "08/10/2026"). Apollo works out each wrong line and the right one from its
+#  own audit trail and sends them here, one at a time.
+#
+#  What this is allowed to touch, and nothing else:
+#   - only a line that is EXACTLY `from` (spaces at its ends ignored), and
+#     only an Apollo line — both `from` and `to` must end "(From apollo)";
+#   - where the right line is already in the cell, the wrong copy is taken
+#     out; otherwise it becomes the right line, where it stood;
+#   - every other line keeps its text, spacing and order; the cell's fill and
+#     font are not written at all (a values-only write);
+#   - a formula cell is refused, as for every Apollo write;
+#   - only the matter's rows on the weekly tabs named (all weekly tabs if none).
+#  DRY BY DEFAULT: it writes only when the body says "dry": false.
+# ---------------------------------------------------------------------------
+def _replace_line_in(existing, old_line, new_line):
+    """-> (new value, action) — action "replace", "remove_duplicate", or None
+    when no line of the cell is exactly old_line. Pure."""
+    lines = ("" if existing is None else str(existing)).split("\n")
+    hits = [i for i, ln in enumerate(lines) if ln.strip() == old_line]
+    if not hits:
+        return None, None
+    if any(ln.strip() == new_line for ln in lines):
+        return "\n".join(ln for i, ln in enumerate(lines) if i not in hits), "remove_duplicate"
+    # The first copy becomes the right line where it stood; a second copy of
+    # the very same wrong line (never seen, but possible) goes.
+    out = [new_line if i == hits[0] else ln for i, ln in enumerate(lines) if i == hits[0] or i not in hits]
+    return "\n".join(out), "replace"
+
+
+def _replace_line(matter, spec, old_line, new_line, tabs=None, dry=True):
+    """-> (result, http status). See the block above."""
+    sharepoint_url = os.getenv("SHAREPOINT_EXCEL_URL", "")
+    drive_id, item_id = graph_client.resolve_sharing_url(sharepoint_url)
+    week = _week_tabs(graph_client.get_excel_worksheets(drive_id, item_id))
+    missing_tabs = []
+    if tabs:
+        wanted = {str(t).strip().lower() for t in tabs if str(t).strip()}
+        have = {s.strip().lower() for s in week}
+        missing_tabs = sorted(t for t in wanted if t not in have)
+        week = [s for s in week if s.strip().lower() in wanted]
+    results, errors, rows = [], [], 0
+    for sheet in week:
+        used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet)
+        values, formulas = used["values"], used["formulas"]
+        col = _find_col_by_header(values, spec["headers"])
+        if col is None:
+            errors.append(f"{sheet}: no column headed {' / '.join(spec['headers'])}")
+            continue
+        start = _range_start_row(used["address"])
+        for ri, row in enumerate(values):
+            a = str((row or [""])[0] or "").strip()
+            if not a.startswith(matter) or a[len(matter):len(matter) + 1].isdigit():
+                continue
+            rows += 1
+            cell = f"{_col_letter(col)}{start + ri}"
+            ref = f"{sheet}!{cell}"
+            if _is_formula_cell(formulas, ri, col):
+                results.append({"cell": ref, "action": "formula_cell", "error": FORMULA_REFUSED})
+                continue
+            existing = row[col] if col < len(row) else ""
+            new_value, action = _replace_line_in(existing, old_line, new_line)
+            if not action:
+                results.append({"cell": ref, "action": "not_found"})
+                continue
+            if not dry:
+                graph_client.update_excel_range(drive_id, item_id, sheet, cell, [[new_value]])
+                action = {"replace": "replaced", "remove_duplicate": "removed_duplicate"}[action]
+                logger.info("replace-line: %s (matter %s) %s: %s -> %s", ref, matter, action, old_line, new_line)
+            results.append({"cell": ref, "action": action, "before": str(existing or ""), "after": new_value})
+    out = {"success": bool(rows), "dry": dry, "matter": matter, "from": old_line, "to": new_line,
+           "results": results, "errors": errors, "missingTabs": missing_tabs,
+           "changed": sum(1 for r in results if r["action"] in ("replaced", "removed_duplicate"))}
+    if not rows:
+        out.update(error="matter not found on " + ("those weekly tabs" if tabs else "any weekly tab"), code="not_found")
+        return out, 404
+    return out, 200
+
+
+@app.route("/api/adj-note/replace-line", methods=["POST"])
+def api_adj_note_replace_line():
+    """POST {matterNumber, kind, from, to[, tabs][, dry][, token]} — see
+    _replace_line. Token-guarded, always (as /api/repair-formula); dry unless
+    "dry": false."""
+    data = request.get_json(silent=True) or {}
+    accepted = [t for t in (os.getenv("FIREBASE_WORKSPACE_TOKEN", ""), APOLLO_INGEST_TOKEN,
+                            os.getenv("APOLLO_NOTE_TOKEN", "")) if t]
+    if not accepted:
+        return jsonify({"success": False, "error": "no token configured on this instance - replace disabled"}), 503
+    supplied = str(data.get("token") or request.args.get("token") or "")
+    if not supplied or not any(hmac.compare_digest(supplied, t) for t in accepted):
+        return jsonify({"success": False, "error": "unauthorized"}), 401
+    matter = str(data.get("matterNumber") or "").strip()
+    kind = str(data.get("kind") or "").strip().lower()
+    old_line = str(data.get("from") or "").strip()
+    new_line = str(data.get("to") or "").strip()
+    tabs = data.get("tabs") if isinstance(data.get("tabs"), list) else None
+    spec = APOLLO_KINDS.get(kind)
+    if not matter.isdigit() or not (3 <= len(matter) <= 7):
+        return jsonify({"success": False, "error": "a numeric matterNumber is required"}), 400
+    if not spec:
+        return jsonify({"success": False, "error": f"unknown kind {kind}"}), 400
+    if not old_line or not new_line or old_line == new_line or "\n" in old_line or "\n" in new_line:
+        return jsonify({"success": False, "error": "from and to are required: one line each, and different"}), 400
+    if not (old_line.endswith("(From apollo)") and new_line.endswith("(From apollo)")):
+        return jsonify({"success": False, "error": "only Apollo's own lines (ending \"(From apollo)\") can be replaced"}), 400
+    missing = _workbook_not_configured()
+    if missing:
+        return jsonify({"success": False, "error": missing}), 500
+    # Writes only on an explicit false — a missing or odd value stays a dry run.
+    dry = not (data.get("dry") is False or str(data.get("dry")).strip().lower() in ("0", "false", "no"))
+    try:
+        result, status = _replace_line(matter, spec, old_line, new_line, tabs=tabs, dry=dry)
+        return jsonify(result), status
+    except Exception as e:
+        logger.error(f"replace-line failed: {e}", exc_info=True)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
