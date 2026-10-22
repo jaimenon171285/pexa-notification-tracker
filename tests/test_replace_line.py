@@ -4,7 +4,8 @@
     'adjagreed' (the team's done-green), both in the Adjustments column
   - /api/adj-note/replace-line: one wrong-dated Apollo line put right — only
     that exact line, the cell's colour never written, a formula cell refused,
-    dry by default, token-guarded
+    dry by default, token-guarded; a cell already right says so
+    (already_right), and one tab failing keeps what was done on the others
 
 The cells below are built from 75689's real case (no names): the 26 Oct tab
 got "Adj served on O/S 17/10/2026" from a row-move re-send that should have
@@ -98,6 +99,11 @@ class ReplaceLineIn(unittest.TestCase):
         for cell in (WRONG + " - checked", "see " + WRONG, WRONG.replace("17/10", "18/10"), "", None):
             self.assertEqual(tracker._replace_line_in(cell, WRONG, RIGHT), (None, None), cell)
 
+    def test_already_right_when_the_wrong_line_is_gone_and_the_right_one_there(self):
+        # put right before — by an earlier run, or by the team: nothing to write
+        self.assertEqual(tracker._replace_line_in("\n".join([TEAM, RIGHT]), WRONG, RIGHT), (None, "already_right"))
+        self.assertEqual(tracker._replace_line_in(RIGHT + " - checked", WRONG, RIGHT), (None, None))
+
 
 class ReplaceLineEndpoint(unittest.TestCase):
     def setUp(self):
@@ -138,9 +144,10 @@ class ReplaceLineEndpoint(unittest.TestCase):
         self.assertFalse(any(w[0] in ("fill", "font", "clearfill", "cell") for w in self.fake.writes))
         # 906001 is another matter: untouched; the old tab was not asked for
         self.assertEqual(self.fake.tabs[TAB].values[2][5], WRONG)
-        # a second run finds nothing to do
+        # a second run finds nothing to do: the cell is already right
         again = self.post(dry=False).get_json()
-        self.assertEqual([x["action"] for x in again["results"]], ["not_found"])
+        self.assertEqual([x["action"] for x in again["results"]], ["already_right"])
+        self.assertEqual(again["changed"], 0)
         self.assertEqual(len(self.fake.writes), 1)
 
     def test_the_right_line_already_there_the_twin_goes(self):
@@ -159,7 +166,7 @@ class ReplaceLineEndpoint(unittest.TestCase):
     def test_every_weekly_tab_when_none_named(self):
         d = self.post(tabs=None).get_json()
         self.assertEqual(sorted((x["cell"], x["action"]) for x in d["results"]),
-                         sorted([(f"{OLD}!F2", "not_found"), (f"{TAB}!F2", "replace")]))
+                         sorted([(f"{OLD}!F2", "already_right"), (f"{TAB}!F2", "replace")]))   # the old tab has only the right line
 
     def test_not_on_those_tabs_is_404_not_found(self):
         r = self.post(matterNumber="90999")
@@ -168,6 +175,35 @@ class ReplaceLineEndpoint(unittest.TestCase):
         r = self.post(tabs=["2 November - 6 November"])
         self.assertEqual(r.status_code, 404)
         self.assertEqual(r.get_json()["missingTabs"], ["2 november - 6 november"])
+
+    def test_one_tab_failing_keeps_what_was_done_on_the_others(self):
+        # The line was written to two tabs; the second tab's read fails after
+        # the first is already put right. The answer still says what changed.
+        self.fake.tabs[OLD].values[1][5] = self.fake.tabs[OLD].formulas[1][5] = WRONG
+        real = self.fake.get_excel_used_range_with_formulas
+
+        def flaky(d, i, name, r1c1=False):
+            if name == TAB:
+                raise RuntimeError("504 Gateway Timeout")
+            return real(d, i, name, r1c1)
+        self.fake.get_excel_used_range_with_formulas = flaky
+        r = self.post(tabs=None, dry=False)
+        d = r.get_json()
+        self.assertEqual(r.status_code, 200, d)
+        self.assertEqual([(x["cell"], x["action"]) for x in d["results"]], [(f"{OLD}!F2", "replaced")])
+        self.assertEqual(d["changed"], 1)
+        self.assertEqual(d["failedTabs"], [TAB])
+        self.assertTrue(any("504" in e for e in d["errors"]), d["errors"])
+        self.assertEqual(self.fake.tabs[OLD].values[1][5], RIGHT)
+
+    def test_every_tab_failing_is_a_502_not_a_not_found(self):
+        def down(*a, **k):
+            raise RuntimeError("504 Gateway Timeout")
+        self.fake.get_excel_used_range_with_formulas = down
+        r = self.post()
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(r.get_json()["code"], "tab_failed")
+        self.assertEqual(self.fake.writes, [])
 
     def test_refusals(self):
         self.assertEqual(self.post(kind="nope").status_code, 400)

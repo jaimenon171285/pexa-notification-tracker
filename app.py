@@ -2365,14 +2365,21 @@ def api_adj_note_recolour():
 #     font are not written at all (a values-only write);
 #   - a formula cell is refused, as for every Apollo write;
 #   - only the matter's rows on the weekly tabs named (all weekly tabs if none).
+#  A cell with no wrong line but the right one is "already_right" (put right
+#  before — by an earlier run, or by the team), so Apollo counts it done.
+#  One tab failing (a Graph error) does not lose what was done on the others:
+#  its error is listed and the rest go on.
 #  DRY BY DEFAULT: it writes only when the body says "dry": false.
 # ---------------------------------------------------------------------------
 def _replace_line_in(existing, old_line, new_line):
-    """-> (new value, action) — action "replace", "remove_duplicate", or None
-    when no line of the cell is exactly old_line. Pure."""
+    """-> (new value, action) — action "replace", "remove_duplicate",
+    "already_right" (no wrong line, the right one there: nothing to write, new
+    value None), or None when no line of the cell is exactly old_line. Pure."""
     lines = ("" if existing is None else str(existing)).split("\n")
     hits = [i for i, ln in enumerate(lines) if ln.strip() == old_line]
     if not hits:
+        if any(ln.strip() == new_line for ln in lines):
+            return None, "already_right"
         return None, None
     if any(ln.strip() == new_line for ln in lines):
         return "\n".join(ln for i, ln in enumerate(lines) if i not in hits), "remove_duplicate"
@@ -2393,38 +2400,54 @@ def _replace_line(matter, spec, old_line, new_line, tabs=None, dry=True):
         have = {s.strip().lower() for s in week}
         missing_tabs = sorted(t for t in wanted if t not in have)
         week = [s for s in week if s.strip().lower() in wanted]
-    results, errors, rows = [], [], 0
+    results, errors, rows, failed = [], [], 0, []
     for sheet in week:
-        used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet)
-        values, formulas = used["values"], used["formulas"]
-        col = _find_col_by_header(values, spec["headers"])
-        if col is None:
-            errors.append(f"{sheet}: no column headed {' / '.join(spec['headers'])}")
-            continue
-        start = _range_start_row(used["address"])
-        for ri, row in enumerate(values):
-            a = str((row or [""])[0] or "").strip()
-            if not a.startswith(matter) or a[len(matter):len(matter) + 1].isdigit():
+        # Per tab, as _push_sheet_note: a Graph error on one tab is listed and
+        # the others still go — and what was already changed is still answered,
+        # so Apollo records it.
+        try:
+            used = graph_client.get_excel_used_range_with_formulas(drive_id, item_id, sheet)
+            values, formulas = used["values"], used["formulas"]
+            col = _find_col_by_header(values, spec["headers"])
+            if col is None:
+                errors.append(f"{sheet}: no column headed {' / '.join(spec['headers'])}")
                 continue
-            rows += 1
-            cell = f"{_col_letter(col)}{start + ri}"
-            ref = f"{sheet}!{cell}"
-            if _is_formula_cell(formulas, ri, col):
-                results.append({"cell": ref, "action": "formula_cell", "error": FORMULA_REFUSED})
-                continue
-            existing = row[col] if col < len(row) else ""
-            new_value, action = _replace_line_in(existing, old_line, new_line)
-            if not action:
-                results.append({"cell": ref, "action": "not_found"})
-                continue
-            if not dry:
-                graph_client.update_excel_range(drive_id, item_id, sheet, cell, [[new_value]])
-                action = {"replace": "replaced", "remove_duplicate": "removed_duplicate"}[action]
-                logger.info("replace-line: %s (matter %s) %s: %s -> %s", ref, matter, action, old_line, new_line)
-            results.append({"cell": ref, "action": action, "before": str(existing or ""), "after": new_value})
+            start = _range_start_row(used["address"])
+            for ri, row in enumerate(values):
+                a = str((row or [""])[0] or "").strip()
+                if not a.startswith(matter) or a[len(matter):len(matter) + 1].isdigit():
+                    continue
+                rows += 1
+                cell = f"{_col_letter(col)}{start + ri}"
+                ref = f"{sheet}!{cell}"
+                if _is_formula_cell(formulas, ri, col):
+                    results.append({"cell": ref, "action": "formula_cell", "error": FORMULA_REFUSED})
+                    continue
+                existing = row[col] if col < len(row) else ""
+                new_value, action = _replace_line_in(existing, old_line, new_line)
+                if not action:
+                    results.append({"cell": ref, "action": "not_found"})
+                    continue
+                if action == "already_right":
+                    results.append({"cell": ref, "action": action})
+                    continue
+                if not dry:
+                    graph_client.update_excel_range(drive_id, item_id, sheet, cell, [[new_value]])
+                    action = {"replace": "replaced", "remove_duplicate": "removed_duplicate"}[action]
+                    logger.info("replace-line: %s (matter %s) %s: %s -> %s", ref, matter, action, old_line, new_line)
+                results.append({"cell": ref, "action": action, "before": str(existing or ""), "after": new_value})
+        except Exception as sheet_err:
+            logger.error(f"replace-line: {sheet} (matter {matter}) failed: {sheet_err}")
+            failed.append(sheet)
+            errors.append(f"{sheet}: {sheet_err}")
     out = {"success": bool(rows), "dry": dry, "matter": matter, "from": old_line, "to": new_line,
-           "results": results, "errors": errors, "missingTabs": missing_tabs,
+           "results": results, "errors": errors, "missingTabs": missing_tabs, "failedTabs": failed,
            "changed": sum(1 for r in results if r["action"] in ("replaced", "removed_duplicate"))}
+    if not rows and failed:
+        # Nothing found, but a tab could not be read: that is the workbook
+        # failing, not "not on those tabs" — Apollo stops and tries later.
+        out.update(error=f"could not read {', '.join(failed)}", code="tab_failed")
+        return out, 502
     if not rows:
         out.update(error="matter not found on " + ("those weekly tabs" if tabs else "any weekly tab"), code="not_found")
         return out, 404
