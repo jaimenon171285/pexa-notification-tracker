@@ -73,6 +73,7 @@ def push_to_apollo(parsed):
         return "error"
 
 from graph_client import GraphClient
+import apollo_health
 from workspace_creator import WorkspaceCreator
 
 load_dotenv()
@@ -3118,6 +3119,13 @@ RUN_NOTIFICATIONS = TRACKER_ROLE in ("all", "notifications")
 RUN_WORKSPACES    = TRACKER_ROLE in ("all", "workspaces")
 print(f"TRACKER_ROLE={TRACKER_ROLE} | notifications={RUN_NOTIFICATIONS} | workspaces={RUN_WORKSPACES}")
 
+@app.route("/api/apollo-health", methods=["GET"])
+def api_apollo_health():
+    """A fresh check (no email) plus the alarm's state — for a look by hand."""
+    run = apollo_health.run_checks()
+    return jsonify({"now": run, "alarm": {k: apollo_health._state[k] for k in ("down", "since", "bad_runs")}})
+
+
 scheduler = BackgroundScheduler()
 if RUN_NOTIFICATIONS:
     scheduler.add_job(sync_emails, "interval", minutes=sync_interval, id="email_sync")
@@ -3149,6 +3157,11 @@ if RUN_NOTIFICATIONS:
     # inserted a new column G on every weekly tab. Re-enabling this line does
     # nothing; a new push would have to be written against a header that exists.
     # scheduler.add_job(auto_push_notifications, "interval", hours=1, id="auto_push")
+if RUN_NOTIFICATIONS:
+    # Apollo health check (Jai, 23 Oct 2026): every 5 minutes, from outside Google, so an
+    # outage like 23 Oct (every function 500 from 8:15am) emails Jai within ~10 minutes.
+    scheduler.add_job(lambda: apollo_health.tick(graph_client, datetime.now(timezone.utc).isoformat()),
+                      "interval", minutes=5, id="apollo_health")
 if RUN_WORKSPACES:
     scheduler.add_job(sync_workspaces, "interval", minutes=5, id="workspace_sync")
 scheduler.start()
